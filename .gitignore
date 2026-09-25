@@ -1,0 +1,62 @@
+# macOS and editor metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Xcode and Swift
+DerivedData/
+.build/
+.swiftpm/
+build/
+*.xcarchive
+*.dSYM
+*.dSYM.zip
+*.xcuserstate
+*.xcscmblueprint
+xcuserdata/
+*.xccheckout
+
+# Android and Gradle
+.gradle/
+local.properties
+captures/
+**/build/
+*.iml
+*.apk
+*.aab
+
+# Signing material and local configuration
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.mobileprovision
+
+# Python analysis tools
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Runtime diagnostics and local benchmarks
+*.log
+logs/
+artifacts/
+benchmarks/local/
+evidence-private/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
