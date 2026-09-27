@@ -1,0 +1,856 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		021F8FC736B6F45D44A3D749 /* HostModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4B14024A5C9E7F596B009DC /* HostModel.swift */; };
+		0A0035556FB5E3DB2FAD6688 /* SessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B5E4098A920EDDB852D1AFA /* SessionCoordinator.swift */; };
+		0BD29EF89A3F9C6166940F86 /* WireFramer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84009A7B016920E9C5CA0158 /* WireFramer.swift */; };
+		157957D9AECF076A80FBF7B3 /* SessionMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7B5E9D398D4472B1EAAE58 /* SessionMessages.swift */; };
+		15EDE647F321E60AD1112162 /* VirtualDisplayManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9228809E89D767F5DEF515E /* VirtualDisplayManager.swift */; };
+		2AE5F16C673ABE40C17A94AC /* WireTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6D447EC6570D2CD2DFB193 /* WireTests.swift */; };
+		338A13B9836FCFA892C2638C /* HostRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FC1EDB151F3C1C781DA772B /* HostRuntimeTests.swift */; };
+		3DFAE1A91AF7F19E67B1BE47 /* InputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC1763145C3CE98EC9E4855E /* InputController.swift */; };
+		4662BAD1B34DA1E6344E836B /* libVirtualDisplayShim.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 03826BFD20C4C4C8B5618CC0 /* libVirtualDisplayShim.a */; };
+		507D14D9396FB495BA1D2EF0 /* HostSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 305AC4E89EF2305E3AE4189B /* HostSettings.swift */; };
+		57A559F1C58D85FDFB43841F /* MirriHostCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */; };
+		632349E7E64356F791202909 /* VideoEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E8ACB066CCF4D7A0E4E5488 /* VideoEncoder.swift */; };
+		63E69C6D8C1257A8876676FC /* LoopbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98F3A8469F39E9B0DA6D4764 /* LoopbackTests.swift */; };
+		72C5702F05E63FAD9E63DB5E /* PermissionsController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13AE55467BA9AED12E857403 /* PermissionsController.swift */; };
+		77AD43AE0DE34B80D85A50AF /* HostObservability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CB0B038D27F46F89C643CCC /* HostObservability.swift */; };
+		7B43CA895023967CFCB49146 /* LoopbackTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ABA3D82C72018E6E1D43F1B /* LoopbackTransport.swift */; };
+		854F609E959DDE1F1512077D /* ADBClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 496773F688E3BDCCF86EEF2A /* ADBClient.swift */; };
+		8D3B0978D5D0D622B6A979E5 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F7C7B0FBED272C8232917B0 /* main.swift */; };
+		8E27B7ED5C555CE65924804C /* module.modulemap in CopyFiles */ = {isa = PBXBuildFile; fileRef = 39E157F6424EA58533D321BC /* module.modulemap */; };
+		96EE3121381807470DF2A025 /* libVirtualDisplayShim.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 03826BFD20C4C4C8B5618CC0 /* libVirtualDisplayShim.a */; };
+		971CD182AC129CDFDA9D8FFC /* MirriHostCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		9727D746B5E17EFE1E05409E /* HostVideoTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAD85EA6CC8D64788F5EC5B5 /* HostVideoTiming.swift */; };
+		9989E5604F0BF4956CDF4032 /* Wire.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF05CB253AA710C5E2252AA8 /* Wire.swift */; };
+		9E6830EE6EA5BE5C4AEE4B05 /* VirtualDisplayController.m in Sources */ = {isa = PBXBuildFile; fileRef = BB4F8CC3234AECEB3296F00B /* VirtualDisplayController.m */; };
+		A490338D443C2426CA88E4EB /* CapturePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8C0FA2738ABBFB96C5CA242 /* CapturePipeline.swift */; };
+		A9A24E7254C9F20A19A0BA05 /* StatusMenuController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA615D89D047A32CF31FD64A /* StatusMenuController.swift */; };
+		B7FA6CA9E2FF297BA50688DF /* MirriHostCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		C21E67024920AD0FB716C282 /* MirriHostCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */; };
+		C8E6E6A1A8F9199F7B572439 /* VirtualDisplayController.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = F65DF3C2CFD1DA3A78B4D130 /* VirtualDisplayController.h */; };
+		D8E4BD61324C39406059B06A /* WireOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77D8D2AC3BF6607F16396B63 /* WireOrder.swift */; };
+		EABF9B66867668DAEFBC5172 /* SessionNegotiator.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF63E3A6FBD493B83E96A86E /* SessionNegotiator.swift */; };
+		F1926F6E6D9CBC1D6A27F81F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29D62F2DFF19F53D2EFC3B55 /* AppDelegate.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		10646B1B397ECA887C5DDD4A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AFCB6F28CBF735DA6A3830BD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 93B4F4898612859D1F0B3706;
+			remoteInfo = VirtualDisplayShim;
+		};
+		4CD1AA298BE6313F46105162 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AFCB6F28CBF735DA6A3830BD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 93B4F4898612859D1F0B3706;
+			remoteInfo = VirtualDisplayShim;
+		};
+		A28489F993710EFC89FEFC3E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AFCB6F28CBF735DA6A3830BD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 59158EEC235730B7747AFB55;
+			remoteInfo = MirriHostCore;
+		};
+		B29D89A07BF346A32ECE050A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AFCB6F28CBF735DA6A3830BD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 59158EEC235730B7747AFB55;
+			remoteInfo = MirriHostCore;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		0807B61ED49CE54973AE7FD4 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				B7FA6CA9E2FF297BA50688DF /* MirriHostCore.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AE0234192011D17764370D43 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				971CD182AC129CDFDA9D8FFC /* MirriHostCore.framework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BD2CC7AF2E41CAA9DEEBE69F /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "include/$(PRODUCT_NAME)";
+			dstSubfolderSpec = 16;
+			files = (
+				C8E6E6A1A8F9199F7B572439 /* VirtualDisplayController.h in CopyFiles */,
+				8E27B7ED5C555CE65924804C /* module.modulemap in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		03826BFD20C4C4C8B5618CC0 /* libVirtualDisplayShim.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libVirtualDisplayShim.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		13AE55467BA9AED12E857403 /* PermissionsController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionsController.swift; sourceTree = "<group>"; };
+		29D62F2DFF19F53D2EFC3B55 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		305AC4E89EF2305E3AE4189B /* HostSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSettings.swift; sourceTree = "<group>"; };
+		39E157F6424EA58533D321BC /* module.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = module.modulemap; sourceTree = "<group>"; };
+		496773F688E3BDCCF86EEF2A /* ADBClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ADBClient.swift; sourceTree = "<group>"; };
+		5ABA3D82C72018E6E1D43F1B /* LoopbackTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackTransport.swift; sourceTree = "<group>"; };
+		5E8ACB066CCF4D7A0E4E5488 /* VideoEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoEncoder.swift; sourceTree = "<group>"; };
+		5FB7078B07492E6C93ECE7B1 /* MirriHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MirriHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6FC1EDB151F3C1C781DA772B /* HostRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostRuntimeTests.swift; sourceTree = "<group>"; };
+		77D8D2AC3BF6607F16396B63 /* WireOrder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireOrder.swift; sourceTree = "<group>"; };
+		7B5E4098A920EDDB852D1AFA /* SessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCoordinator.swift; sourceTree = "<group>"; };
+		7CB0B038D27F46F89C643CCC /* HostObservability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostObservability.swift; sourceTree = "<group>"; };
+		84009A7B016920E9C5CA0158 /* WireFramer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireFramer.swift; sourceTree = "<group>"; };
+		8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = MirriHostCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		98F3A8469F39E9B0DA6D4764 /* LoopbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackTests.swift; sourceTree = "<group>"; };
+		9F7C7B0FBED272C8232917B0 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		AA615D89D047A32CF31FD64A /* StatusMenuController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusMenuController.swift; sourceTree = "<group>"; };
+		BA7B5E9D398D4472B1EAAE58 /* SessionMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionMessages.swift; sourceTree = "<group>"; };
+		BB4F8CC3234AECEB3296F00B /* VirtualDisplayController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = VirtualDisplayController.m; sourceTree = "<group>"; };
+		CF05CB253AA710C5E2252AA8 /* Wire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wire.swift; sourceTree = "<group>"; };
+		CFDB2F836196D6AF6E39FEED /* MirriHostTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MirriHostTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D4B14024A5C9E7F596B009DC /* HostModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostModel.swift; sourceTree = "<group>"; };
+		EC1763145C3CE98EC9E4855E /* InputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputController.swift; sourceTree = "<group>"; };
+		EC6D447EC6570D2CD2DFB193 /* WireTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireTests.swift; sourceTree = "<group>"; };
+		EF63E3A6FBD493B83E96A86E /* SessionNegotiator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionNegotiator.swift; sourceTree = "<group>"; };
+		F65DF3C2CFD1DA3A78B4D130 /* VirtualDisplayController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = VirtualDisplayController.h; sourceTree = "<group>"; };
+		F8C0FA2738ABBFB96C5CA242 /* CapturePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturePipeline.swift; sourceTree = "<group>"; };
+		F9228809E89D767F5DEF515E /* VirtualDisplayManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualDisplayManager.swift; sourceTree = "<group>"; };
+		FAD85EA6CC8D64788F5EC5B5 /* HostVideoTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostVideoTiming.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		043E966C01CFCA0C1720E7EA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C21E67024920AD0FB716C282 /* MirriHostCore.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6CC72AFFEB114CD44B173BB0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				57A559F1C58D85FDFB43841F /* MirriHostCore.framework in Frameworks */,
+				96EE3121381807470DF2A025 /* libVirtualDisplayShim.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FF21FE2A49A984677FB987B6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4662BAD1B34DA1E6344E836B /* libVirtualDisplayShim.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		07A802DF6E3432B8FEDB7DC2 = {
+			isa = PBXGroup;
+			children = (
+				D241CF302CD8BF77341AD9A8 /* App */,
+				80FE98E3A67B775DEEBEAFE1 /* Core */,
+				C57A6CD18A55CC77CAB37E35 /* Tests */,
+				367FE04D8FFF1F14F023B0CB /* VirtualDisplayShim */,
+				90837C5B64FA4D0E6128E34F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		0A10C5F6DA53A8662117550D /* ProtocolTests */ = {
+			isa = PBXGroup;
+			children = (
+				EC6D447EC6570D2CD2DFB193 /* WireTests.swift */,
+			);
+			path = ProtocolTests;
+			sourceTree = "<group>";
+		};
+		2AC1F004053FCE870028FC9E /* Input */ = {
+			isa = PBXGroup;
+			children = (
+				EC1763145C3CE98EC9E4855E /* InputController.swift */,
+			);
+			path = Input;
+			sourceTree = "<group>";
+		};
+		30A2CC6A7AFF7E20CDD8E4F0 /* Device */ = {
+			isa = PBXGroup;
+			children = (
+				496773F688E3BDCCF86EEF2A /* ADBClient.swift */,
+			);
+			path = Device;
+			sourceTree = "<group>";
+		};
+		367FE04D8FFF1F14F023B0CB /* VirtualDisplayShim */ = {
+			isa = PBXGroup;
+			children = (
+				BB4F8CC3234AECEB3296F00B /* VirtualDisplayController.m */,
+				BEAF42485CC7750EE7C7EF9F /* include */,
+			);
+			path = VirtualDisplayShim;
+			sourceTree = "<group>";
+		};
+		49CDFD01AF6C4F692719D025 /* SessionTests */ = {
+			isa = PBXGroup;
+			children = (
+				6FC1EDB151F3C1C781DA772B /* HostRuntimeTests.swift */,
+				98F3A8469F39E9B0DA6D4764 /* LoopbackTests.swift */,
+			);
+			path = SessionTests;
+			sourceTree = "<group>";
+		};
+		64102E16FCE61A245DEAF65D /* Model */ = {
+			isa = PBXGroup;
+			children = (
+				BA7B5E9D398D4472B1EAAE58 /* SessionMessages.swift */,
+				CF05CB253AA710C5E2252AA8 /* Wire.swift */,
+				84009A7B016920E9C5CA0158 /* WireFramer.swift */,
+				77D8D2AC3BF6607F16396B63 /* WireOrder.swift */,
+			);
+			path = Model;
+			sourceTree = "<group>";
+		};
+		67F9ABF51F370719C4E2DA12 /* Observability */ = {
+			isa = PBXGroup;
+			children = (
+				7CB0B038D27F46F89C643CCC /* HostObservability.swift */,
+				FAD85EA6CC8D64788F5EC5B5 /* HostVideoTiming.swift */,
+			);
+			path = Observability;
+			sourceTree = "<group>";
+		};
+		807684311FA5FC5429DDF7D3 /* Streaming */ = {
+			isa = PBXGroup;
+			children = (
+				F8C0FA2738ABBFB96C5CA242 /* CapturePipeline.swift */,
+				5E8ACB066CCF4D7A0E4E5488 /* VideoEncoder.swift */,
+			);
+			path = Streaming;
+			sourceTree = "<group>";
+		};
+		80FE98E3A67B775DEEBEAFE1 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				30A2CC6A7AFF7E20CDD8E4F0 /* Device */,
+				877D485EFF3B3A4C34287A63 /* Display */,
+				2AC1F004053FCE870028FC9E /* Input */,
+				64102E16FCE61A245DEAF65D /* Model */,
+				67F9ABF51F370719C4E2DA12 /* Observability */,
+				977C461D0CA71AC7C99AEF0D /* Session */,
+				807684311FA5FC5429DDF7D3 /* Streaming */,
+				CB79494CD4DBD48C0461178E /* Transport */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		877D485EFF3B3A4C34287A63 /* Display */ = {
+			isa = PBXGroup;
+			children = (
+				F9228809E89D767F5DEF515E /* VirtualDisplayManager.swift */,
+			);
+			path = Display;
+			sourceTree = "<group>";
+		};
+		90837C5B64FA4D0E6128E34F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				03826BFD20C4C4C8B5618CC0 /* libVirtualDisplayShim.a */,
+				5FB7078B07492E6C93ECE7B1 /* MirriHost.app */,
+				8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */,
+				CFDB2F836196D6AF6E39FEED /* MirriHostTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		977C461D0CA71AC7C99AEF0D /* Session */ = {
+			isa = PBXGroup;
+			children = (
+				D4B14024A5C9E7F596B009DC /* HostModel.swift */,
+				7B5E4098A920EDDB852D1AFA /* SessionCoordinator.swift */,
+				EF63E3A6FBD493B83E96A86E /* SessionNegotiator.swift */,
+			);
+			path = Session;
+			sourceTree = "<group>";
+		};
+		BEAF42485CC7750EE7C7EF9F /* include */ = {
+			isa = PBXGroup;
+			children = (
+				39E157F6424EA58533D321BC /* module.modulemap */,
+				F65DF3C2CFD1DA3A78B4D130 /* VirtualDisplayController.h */,
+			);
+			path = include;
+			sourceTree = "<group>";
+		};
+		C57A6CD18A55CC77CAB37E35 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				0A10C5F6DA53A8662117550D /* ProtocolTests */,
+				49CDFD01AF6C4F692719D025 /* SessionTests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		CB79494CD4DBD48C0461178E /* Transport */ = {
+			isa = PBXGroup;
+			children = (
+				5ABA3D82C72018E6E1D43F1B /* LoopbackTransport.swift */,
+			);
+			path = Transport;
+			sourceTree = "<group>";
+		};
+		D241CF302CD8BF77341AD9A8 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				29D62F2DFF19F53D2EFC3B55 /* AppDelegate.swift */,
+				305AC4E89EF2305E3AE4189B /* HostSettings.swift */,
+				9F7C7B0FBED272C8232917B0 /* main.swift */,
+				13AE55467BA9AED12E857403 /* PermissionsController.swift */,
+				AA615D89D047A32CF31FD64A /* StatusMenuController.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		25469118906640D6005B7870 /* MirriHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 16CE15D690C3BC119B98C144 /* Build configuration list for PBXNativeTarget "MirriHost" */;
+			buildPhases = (
+				B7D26350B9C6E4835E2E8B33 /* Sources */,
+				6CC72AFFEB114CD44B173BB0 /* Frameworks */,
+				AE0234192011D17764370D43 /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				941B02AFE3107A093721D012 /* PBXTargetDependency */,
+				B02E5672F45DE6AE22F5B071 /* PBXTargetDependency */,
+			);
+			name = MirriHost;
+			packageProductDependencies = (
+			);
+			productName = MirriHost;
+			productReference = 5FB7078B07492E6C93ECE7B1 /* MirriHost.app */;
+			productType = "com.apple.product-type.application";
+		};
+		417EB1DB263D33957AFA824B /* MirriHostTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 795898DFF003FCD2AD589558 /* Build configuration list for PBXNativeTarget "MirriHostTests" */;
+			buildPhases = (
+				1387214F3436DB5EF2C0609F /* Sources */,
+				043E966C01CFCA0C1720E7EA /* Frameworks */,
+				0807B61ED49CE54973AE7FD4 /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C0F3AE95B0C08EB56147B9AE /* PBXTargetDependency */,
+			);
+			name = MirriHostTests;
+			packageProductDependencies = (
+			);
+			productName = MirriHostTests;
+			productReference = CFDB2F836196D6AF6E39FEED /* MirriHostTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		59158EEC235730B7747AFB55 /* MirriHostCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7108B29A5586363952F76F6E /* Build configuration list for PBXNativeTarget "MirriHostCore" */;
+			buildPhases = (
+				DE6E4DB8573DFBB9368246BC /* Sources */,
+				FF21FE2A49A984677FB987B6 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D991C88918036EC968E2543C /* PBXTargetDependency */,
+			);
+			name = MirriHostCore;
+			packageProductDependencies = (
+			);
+			productName = MirriHostCore;
+			productReference = 8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */;
+			productType = "com.apple.product-type.framework";
+		};
+		93B4F4898612859D1F0B3706 /* VirtualDisplayShim */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7EEE2F8502606191F22F57EF /* Build configuration list for PBXNativeTarget "VirtualDisplayShim" */;
+			buildPhases = (
+				BD2CC7AF2E41CAA9DEEBE69F /* CopyFiles */,
+				441977B2D8ABFCE7B6A6F4F2 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VirtualDisplayShim;
+			packageProductDependencies = (
+			);
+			productName = VirtualDisplayShim;
+			productReference = 03826BFD20C4C4C8B5618CC0 /* libVirtualDisplayShim.a */;
+			productType = "com.apple.product-type.library.static";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AFCB6F28CBF735DA6A3830BD /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = BEE7C71FB75B59A99737057F /* Build configuration list for PBXProject "MirriHost" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 07A802DF6E3432B8FEDB7DC2;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 90837C5B64FA4D0E6128E34F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				59158EEC235730B7747AFB55 /* MirriHostCore */,
+				93B4F4898612859D1F0B3706 /* VirtualDisplayShim */,
+				25469118906640D6005B7870 /* MirriHost */,
+				417EB1DB263D33957AFA824B /* MirriHostTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1387214F3436DB5EF2C0609F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				338A13B9836FCFA892C2638C /* HostRuntimeTests.swift in Sources */,
+				63E69C6D8C1257A8876676FC /* LoopbackTests.swift in Sources */,
+				2AE5F16C673ABE40C17A94AC /* WireTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		441977B2D8ABFCE7B6A6F4F2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9E6830EE6EA5BE5C4AEE4B05 /* VirtualDisplayController.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B7D26350B9C6E4835E2E8B33 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F1926F6E6D9CBC1D6A27F81F /* AppDelegate.swift in Sources */,
+				507D14D9396FB495BA1D2EF0 /* HostSettings.swift in Sources */,
+				72C5702F05E63FAD9E63DB5E /* PermissionsController.swift in Sources */,
+				A9A24E7254C9F20A19A0BA05 /* StatusMenuController.swift in Sources */,
+				8D3B0978D5D0D622B6A979E5 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DE6E4DB8573DFBB9368246BC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				854F609E959DDE1F1512077D /* ADBClient.swift in Sources */,
+				A490338D443C2426CA88E4EB /* CapturePipeline.swift in Sources */,
+				021F8FC736B6F45D44A3D749 /* HostModel.swift in Sources */,
+				77AD43AE0DE34B80D85A50AF /* HostObservability.swift in Sources */,
+				9727D746B5E17EFE1E05409E /* HostVideoTiming.swift in Sources */,
+				3DFAE1A91AF7F19E67B1BE47 /* InputController.swift in Sources */,
+				7B43CA895023967CFCB49146 /* LoopbackTransport.swift in Sources */,
+				0A0035556FB5E3DB2FAD6688 /* SessionCoordinator.swift in Sources */,
+				157957D9AECF076A80FBF7B3 /* SessionMessages.swift in Sources */,
+				EABF9B66867668DAEFBC5172 /* SessionNegotiator.swift in Sources */,
+				632349E7E64356F791202909 /* VideoEncoder.swift in Sources */,
+				15EDE647F321E60AD1112162 /* VirtualDisplayManager.swift in Sources */,
+				9989E5604F0BF4956CDF4032 /* Wire.swift in Sources */,
+				0BD29EF89A3F9C6166940F86 /* WireFramer.swift in Sources */,
+				D8E4BD61324C39406059B06A /* WireOrder.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		941B02AFE3107A093721D012 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 59158EEC235730B7747AFB55 /* MirriHostCore */;
+			targetProxy = B29D89A07BF346A32ECE050A /* PBXContainerItemProxy */;
+		};
+		B02E5672F45DE6AE22F5B071 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 93B4F4898612859D1F0B3706 /* VirtualDisplayShim */;
+			targetProxy = 4CD1AA298BE6313F46105162 /* PBXContainerItemProxy */;
+		};
+		C0F3AE95B0C08EB56147B9AE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 59158EEC235730B7747AFB55 /* MirriHostCore */;
+			targetProxy = A28489F993710EFC89FEFC3E /* PBXContainerItemProxy */;
+		};
+		D991C88918036EC968E2543C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 93B4F4898612859D1F0B3706 /* VirtualDisplayShim */;
+			targetProxy = 10646B1B397ECA887C5DDD4A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0854727126C545D4509C4577 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PUBLIC_HEADERS_FOLDER_PATH = include;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+		19F881113EB4FF71CB931041 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		7C2A010F45CC51FDC4802227 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PUBLIC_HEADERS_FOLDER_PATH = include;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		84BB6DAAECD23EEF88EA57A0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/VirtualDisplayShim/include";
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Release;
+		};
+		9AD4F6032B873FD7A13E57F1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		B739F72AF0D664F27A1CC7AA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/VirtualDisplayShim/include";
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Debug;
+		};
+		C6B0503C2F3ABB38B20DD9CE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Mirri displays this Mac's extended desktop on your USB tablet.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mirri.host;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		DABDFFEB2E4A8810CDE93330 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		E4EBEB5BE5C399CC6AC188C8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		FA47FD553968CA138A2E61C5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Mirri displays this Mac's extended desktop on your USB tablet.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.mirri.host;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		16CE15D690C3BC119B98C144 /* Build configuration list for PBXNativeTarget "MirriHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C6B0503C2F3ABB38B20DD9CE /* Debug */,
+				FA47FD553968CA138A2E61C5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7108B29A5586363952F76F6E /* Build configuration list for PBXNativeTarget "MirriHostCore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B739F72AF0D664F27A1CC7AA /* Debug */,
+				84BB6DAAECD23EEF88EA57A0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		795898DFF003FCD2AD589558 /* Build configuration list for PBXNativeTarget "MirriHostTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9AD4F6032B873FD7A13E57F1 /* Debug */,
+				DABDFFEB2E4A8810CDE93330 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7EEE2F8502606191F22F57EF /* Build configuration list for PBXNativeTarget "VirtualDisplayShim" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7C2A010F45CC51FDC4802227 /* Debug */,
+				0854727126C545D4509C4577 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		BEE7C71FB75B59A99737057F /* Build configuration list for PBXProject "MirriHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E4EBEB5BE5C399CC6AC188C8 /* Debug */,
+				19F881113EB4FF71CB931041 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = AFCB6F28CBF735DA6A3830BD /* Project object */;
+}

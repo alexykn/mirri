@@ -1,0 +1,9 @@
+[project]
+name = "mirri-offline-tools"
+version = "0.1.0"
+description = "Offline synthetic transport and privacy-safe session log analysis"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false

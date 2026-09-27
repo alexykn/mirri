@@ -1,0 +1,4 @@
+module VirtualDisplayShim {
+  header "VirtualDisplayController.h"
+  export *
+}

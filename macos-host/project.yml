@@ -1,0 +1,62 @@
+name: MirriHost
+options:
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    CODE_SIGNING_ALLOWED: NO
+targets:
+  MirriHostCore:
+    type: framework
+    platform: macOS
+    sources:
+      - Core
+    dependencies:
+      - target: VirtualDisplayShim
+        link: true
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/VirtualDisplayShim/include"
+  VirtualDisplayShim:
+    type: library.static
+    platform: macOS
+    sources:
+      - VirtualDisplayShim
+    settings:
+      base:
+        PUBLIC_HEADERS_FOLDER_PATH: include
+  MirriHost:
+    type: application
+    platform: macOS
+    sources:
+      - App
+    dependencies:
+      - target: MirriHostCore
+      - target: VirtualDisplayShim
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.mirri.host
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSScreenCaptureUsageDescription: Mirri displays this Mac's extended desktop on your USB tablet.
+        INFOPLIST_KEY_LSUIElement: YES
+  MirriHostTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+    dependencies:
+      - target: MirriHostCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  MirriHost:
+    build:
+      targets:
+        MirriHost: all
+        MirriHostTests: [test]
+    test:
+      targets:
+        - MirriHostTests
