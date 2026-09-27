@@ -3,7 +3,7 @@ import MirriHostCore
 
 /// A transient, keyboard-dismissable menu-bar popover; never creates a main window.
 @MainActor final class StatusMenuController: NSObject {
-  private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+  private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
   private let popover = NSPopover()
   let panel = ConnectionPanelModel()
 
@@ -14,9 +14,7 @@ import MirriHostCore
     popover.contentSize = NSSize(width: 350, height: 475)
     popover.contentViewController = makeConnectionPanel(panel)
     if let button = item.button {
-      button.image = NSImage(
-        systemSymbolName: "display.2", accessibilityDescription: "Mirri connection")
-      button.image?.isTemplate = true
+      button.title = "▣ Mirri"
       button.toolTip = "Mirri · Connection"
       button.target = self
       button.action = #selector(toggle)

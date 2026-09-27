@@ -15,7 +15,7 @@ xcodebuild -project MirriHost.xcodeproj -scheme MirriHost \
 Start only after Screen Recording and Accessibility permissions have been
 granted to the **same stable app bundle identity** (a release build must be
 signed consistently). Select an authorized physical USB device.
-Click the Mirri display icon in the menu bar to toggle its compact connection
+Click **▣ Mirri** in the menu bar to toggle its compact connection
 popover (Escape or a click elsewhere dismisses it). Choose **USB** or **Network**,
 the USB tablet, and (for Network) a currently assigned Mac IPv4 interface; then
 press **Connect**. Progress, authorization/discovery issues and next steps appear
@@ -31,6 +31,31 @@ of the development build without remembered USB auto-connect, launch its
 executable with `--no-auto-connect --show-connection`; this does not simulate
 connectivity or alter device permissions. Do not overwrite an already-running
 development app when inspecting another build.
+
+### Development signing and permissions
+
+The `CODE_SIGNING_ALLOWED=NO` build above is for checks, not direct installation.
+Its linker-generated executable signature does not seal the application bundle.
+Before launching a development copy, quit Mirri, copy the complete build into a
+fresh staging directory (do not merge it over an older app), then sign and verify
+that staged app before replacing `~/Applications/Mirri Development.app`:
+
+```sh
+codesign --force --deep --sign - --identifier dev.mirri.host --timestamp=none \
+  "/path/to/staged/Mirri Development.app"
+codesign --verify --deep --strict "/path/to/staged/Mirri Development.app"
+```
+
+This is local ad-hoc signing, not a release identity. Its code-hash requirement
+can change on rebuild, so a new build may need permission again. For permissions
+that survive updates, use a consistent certificate-backed signing identity.
+If Screen Recording stays enabled in Settings but macOS logs a mismatched code
+requirement, quit the app and reset **only** its stale entry with
+`tccutil reset ScreenCapture dev.mirri.host`, then launch the verified copy and
+grant access normally. Repeatedly toggling the old entry does not repair a
+signature mismatch. Do not reset unrelated applications or edit the TCC database.
+
+### Connecting
 
 For USB, choose **USB** and **Connect**; it binds only 127.0.0.1 and requires installed
 client `versionCode >= 2`. For **Network (USB setup)**, first put Mac and tablet
