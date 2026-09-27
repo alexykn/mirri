@@ -7,3 +7,20 @@ dependencies = []
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = [
+    "radon==6.0.1",
+    "ruff==0.15.14",
+    "ty==0.0.39",
+    "xenon==0.9.3",
+]
+
+[tool.ruff]
+target-version = "py311"
+include = ["*.py"]
+exclude = [".venv", ".git", "__pycache__", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501"] # No arbitrary line-length gate (notably synthetic test fixtures).

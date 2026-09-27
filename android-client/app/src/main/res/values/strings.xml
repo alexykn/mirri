@@ -1,0 +1,4 @@
+<resources>
+    <string name="session_status">Mirri: %1$s\n%2$s</string>
+    <string name="launch_from_host">Mirri: launch from the Mac host over USB</string>
+</resources>

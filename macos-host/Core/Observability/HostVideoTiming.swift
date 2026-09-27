@@ -69,18 +69,22 @@ public struct StageTimingHistogram: Sendable {
     (1...50).map { UInt64($0) * 2_000_000 }
     + [125, 150, 200, 250, 500, 1_000, 5_000, 10_000].map { UInt64($0) * 1_000_000 }
   private var bins = [UInt64](repeating: 0, count: boundsNs.count + 1)
+  private var sampleCount: UInt64 = 0
   private var maximum: UInt64 = 0
   private var gaps: FrameGapBursts?
   public init(trackGaps: Bool = false) { gaps = trackGaps ? FrameGapBursts() : nil }
   @discardableResult public mutating func observe(_ nanos: UInt64) -> Bool {
     let index = Self.boundsNs.firstIndex(where: { nanos <= $0 }) ?? Self.boundsNs.count
     bins[index] += 1
+    sampleCount += 1
     maximum = max(maximum, nanos)
     gaps?.observe(nanos)
     return true
   }
   public mutating func finishGapRun() { gaps?.finish() }
-  public var count: UInt64 { bins.reduce(0, +) }
+  public var count: UInt64 { sampleCount }
+  /// Empty means no samples were observed, including zero-duration samples.
+  public var isEmpty: Bool { sampleCount == 0 }
   public var maxNs: UInt64 { maximum }
   public func upperBoundMs(_ fraction: Double) -> Double? {
     let total = count
@@ -97,12 +101,13 @@ public struct StageTimingHistogram: Sendable {
   }
   public func encoded() -> String {
     "\(count):\(upperBoundMs(0.5) ?? -1):\(upperBoundMs(0.95) ?? -1):"
-      + "\(upperBoundMs(0.99) ?? -1):\(count > 0 ? Double(maximum) / 1e6 : -1):"
+      + "\(upperBoundMs(0.99) ?? -1):\(!isEmpty ? Double(maximum) / 1e6 : -1):"
       + bins.map(String.init).joined(separator: ".") + ":" + (gaps?.summary().encoded() ?? "na")
   }
   public mutating func drain() -> StageTimingHistogram {
     let current = self
     bins = [UInt64](repeating: 0, count: bins.count)
+    sampleCount = 0
     maximum = 0
     // The returned copy owns interval counts, while an open run carries on.
     if gaps != nil { _ = gaps?.drain() }
@@ -114,6 +119,28 @@ public struct StageTimingHistogram: Sendable {
 /// same SCK stream. Encoder-rebased wire PTS is a separate media sequence.
 /// Host callback/write stamps use DispatchTime uptime; no PTS-to-host subtraction.
 public final class HostVideoTiming: @unchecked Sendable {
+  public struct MeasuredReport: Sendable {
+    public let line: String
+    public let lockNs: UInt64
+    public let formatNs: UInt64
+  }
+  private struct Counts {
+    let completed: UInt64
+    let encoded: UInt64
+    let written: UInt64
+    let missingPTS: UInt64
+    let invalidClock: UInt64
+    let sequenceMismatch: UInt64
+    let truncatedDecoderPTS: UInt64
+    let creditHigh: Int
+    let encodedQueueHigh: Int
+    let keyEncoded: UInt64
+    let keyWritten: UInt64
+    let keyBytes: UInt64
+    let keyMaxBytes: UInt64
+    let otherBytes: UInt64
+    let otherMaxBytes: UInt64
+  }
   public static let schema = 4
   public enum Stage: String, CaseIterable, Sendable {
     case mediaPtsGap, completeCallbackGap, vtCall, vtCallback, conversion
@@ -159,6 +186,13 @@ public final class HostVideoTiming: @unchecked Sendable {
   private var intervalStartNs: UInt64 = 0
   private var windowStartNs: UInt64 = 0
 
+  /// Stage.allCases is the complete timing schema; a missing entry is a programmer error.
+  private func histogram(_ stage: Stage, observe nanos: UInt64) {
+    guard histograms[stage]?.observe(nanos) != nil else {
+      preconditionFailure("Missing timing histogram: \(stage.rawValue)")
+    }
+  }
+
   public init(epoch: UInt32, generation: UInt32) {
     self.epoch = epoch
     self.generation = generation
@@ -202,7 +236,7 @@ public final class HostVideoTiming: @unchecked Sendable {
       invalidClock += 1
       return
     }
-    _ = histograms[stage]!.observe(end - start)
+    histogram(stage, observe: end - start)
   }
   private func mediaDuration(_ stage: Stage, seconds: Double) {
     guard seconds.isFinite, seconds >= 0 else {
@@ -211,7 +245,7 @@ public final class HostVideoTiming: @unchecked Sendable {
     }
     // Saturated astronomical media values remain visibly in overflow.
     let ns = seconds >= Double(UInt64.max) / 1e9 ? UInt64.max : UInt64(seconds * 1e9)
-    _ = histograms[stage]!.observe(ns)
+    histogram(stage, observe: ns)
   }
   public func complete(pts: CMTime, callbackNs: UInt64) {
     lock.lock()
@@ -295,29 +329,41 @@ public final class HostVideoTiming: @unchecked Sendable {
     duration(.outputToWrite, start: unit.encoderCallbackNs, end: atNs)
     duration(.conversionToWrite, start: unit.convertedNs, end: atNs)
   }
-  private func report(final: Bool, atNs: UInt64) -> (line: String, lockNs: UInt64, formatNs: UInt64)
-  {
+  private func report(final: Bool, atNs: UInt64) -> MeasuredReport {
     reportLock.lock()
     defer { reportLock.unlock() }
     let lockStart = DispatchTime.now().uptimeNanoseconds
     lock.lock()
     if let finalReport {
       lock.unlock()
-      return (finalReport, 0, 0)
+      return MeasuredReport(line: finalReport, lockNs: 0, formatNs: 0)
     }
     let startNs = intervalStartNs
     let endNs = max(atNs, startNs)
     if final { active = false }
-    if final { for stage in Self.gapStages { histograms[stage]?.finishGapRun() } }
-    let copied = Stage.allCases.map { ($0, histograms[$0]!.drain()) }
+    if final {
+      for stage in Self.gapStages {
+        guard histograms[stage]?.finishGapRun() != nil else {
+          preconditionFailure("Missing timing histogram: \(stage.rawValue)")
+        }
+      }
+    }
+    let copied = Stage.allCases.map { stage in
+      guard let drained = histograms[stage]?.drain() else {
+        preconditionFailure("Missing timing histogram: \(stage.rawValue)")
+      }
+      return (stage, drained)
+    }
     intervalStartNs = endNs
     let nextRecord = record
     record += 1
-    let counts = (
-      completed, encoded, written, missingPTS, invalidClock,
-      sequenceMismatch, truncatedDecoderPTS, maxCreditDepth, maxEncodedQueue
-    )
-    let keyCounts = (keyEncoded, keyWritten, keyBytes, keyMaxBytes, otherBytes, otherMaxBytes)
+    let counts = Counts(
+      completed: completed, encoded: encoded, written: written, missingPTS: missingPTS,
+      invalidClock: invalidClock, sequenceMismatch: sequenceMismatch,
+      truncatedDecoderPTS: truncatedDecoderPTS, creditHigh: maxCreditDepth,
+      encodedQueueHigh: maxEncodedQueue, keyEncoded: keyEncoded, keyWritten: keyWritten,
+      keyBytes: keyBytes, keyMaxBytes: keyMaxBytes, otherBytes: otherBytes,
+      otherMaxBytes: otherMaxBytes)
     completed = 0
     encoded = 0
     written = 0
@@ -339,11 +385,11 @@ public final class HostVideoTiming: @unchecked Sendable {
     let result =
       "videoTiming v=\(Self.schema) epoch=\(epoch) generation=\(generation) record=\(nextRecord) "
       + "startNs=\(startNs) endNs=\(endNs) final=\(final ? 1 : 0) "
-      + "complete=\(counts.0) encoded=\(counts.1) written=\(counts.2) missingPTS=\(counts.3) invalidClock=\(counts.4) "
-      + "sequenceMismatch=\(counts.5) truncatedDecoderPTS=\(counts.6) "
-      + "creditHigh=\(counts.7) encodedQueueHigh=\(counts.8) "
-      + "keyEncoded=\(keyCounts.0) keyWritten=\(keyCounts.1) keyBytes=\(keyCounts.2) "
-      + "keyMaxBytes=\(keyCounts.3) otherBytes=\(keyCounts.4) otherMaxBytes=\(keyCounts.5) "
+      + "complete=\(counts.completed) encoded=\(counts.encoded) written=\(counts.written) missingPTS=\(counts.missingPTS) invalidClock=\(counts.invalidClock) "
+      + "sequenceMismatch=\(counts.sequenceMismatch) truncatedDecoderPTS=\(counts.truncatedDecoderPTS) "
+      + "creditHigh=\(counts.creditHigh) encodedQueueHigh=\(counts.encodedQueueHigh) "
+      + "keyEncoded=\(counts.keyEncoded) keyWritten=\(counts.keyWritten) keyBytes=\(counts.keyBytes) "
+      + "keyMaxBytes=\(counts.keyMaxBytes) otherBytes=\(counts.otherBytes) otherMaxBytes=\(counts.otherMaxBytes) "
       + "capturePtsToCallback=unavailable-unverified-clock \(stages)"
     let formatEnd = DispatchTime.now().uptimeNanoseconds
     if final {
@@ -351,14 +397,15 @@ public final class HostVideoTiming: @unchecked Sendable {
       finalReport = result
       lock.unlock()
     }
-    return (result, formatStart - lockStart, formatEnd - formatStart)
+    return MeasuredReport(
+      line: result, lockNs: formatStart - lockStart, formatNs: formatEnd - formatStart)
   }
   public func snapshot(atNs: UInt64 = DispatchTime.now().uptimeNanoseconds) -> String {
     report(final: false, atNs: atNs).line
   }
   /// Off-hot-path report phases: capture-lock/copy and subsequent formatting.
   public func snapshotMeasured(atNs: UInt64 = DispatchTime.now().uptimeNanoseconds)
-    -> (line: String, lockNs: UInt64, formatNs: UInt64)
+    -> MeasuredReport
   {
     report(final: false, atNs: atNs)
   }

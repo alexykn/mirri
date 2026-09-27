@@ -55,7 +55,11 @@ class AttemptSockets : AutoCloseable {
     }
 }
 
+// Socket setup and owner registration can fail with checked IO or unchecked provider exceptions;
+// every failure must close the raw channel and resume the suspended caller.
+
 /** Cancellation closes the owned SocketChannel immediately, interrupting blocking connect. */
+@Suppress("TooGenericExceptionCaught")
 suspend fun connect(
     port: Int,
     owner: AttemptSockets,
@@ -77,7 +81,10 @@ suspend fun connect(
         }
     }
 
+// Operation is caller-provided (including protocol parsing); forward its original exception.
+
 /** Cancellation closes the channel from the cancelling thread, waking blocking read/write. */
+@Suppress("TooGenericExceptionCaught")
 suspend fun <T> blockingSocket(
     close: () -> Unit,
     operation: () -> T,
@@ -93,7 +100,10 @@ suspend fun <T> blockingSocket(
         }
     }
 
+// Authentication can fail from either socket IO or protocol validation; both close this wrapper.
+
 /** Raw socket remains owned even if prompt cancellation discards the authenticated wrapper. */
+@Suppress("TooGenericExceptionCaught")
 suspend fun openVideo(
     port: Int,
     owner: AttemptSockets,
@@ -123,6 +133,9 @@ class ControlChannel(
     private var sequence = 0uL
 
     @Volatile private var inFlight: CompletableDeferred<Unit>? = null
+
+    // A writer must complete all pending acknowledgments exceptionally for any encoding or IO failure.
+    @Suppress("TooGenericExceptionCaught")
     private val writer: Job =
         scope.launch(Dispatchers.IO) {
             try {

@@ -13,11 +13,14 @@ public final class LoopbackListener: @unchecked Sendable {
   private let video: Bool
   public init(port: UInt16, noDelay: Bool = false, video: Bool = false) throws {
     self.video = video
+    guard let endpointPort = NWEndpoint.Port(rawValue: port) else {
+      throw HostFailure.transport
+    }
     let tcp = NWProtocolTCP.Options()
     tcp.noDelay = noDelay
     let params = NWParameters(tls: nil, tcp: tcp)
     params.requiredLocalEndpoint = .hostPort(
-      host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port)!)
+      host: .ipv4(.loopback), port: endpointPort)
     listener = try NWListener(using: params)
     listener.newConnectionHandler = { [weak self] conn in self?.offer(conn) }
     listener.stateUpdateHandler = { [weak self] state in

@@ -305,16 +305,13 @@ object SessionMessages {
                 val codec = VideoCodecId.fromWire(number(f[2]).toInt())
                 val dimensions = values(f[5])
                 val bitrate = number(f[7]).toLong()
-                if (number(f[3]).toInt() != codec.wire ||
-                    number(dimensions[0]) != 2456uL ||
-                    number(dimensions[1]) != 1600uL ||
-                    number(f[6]) != 60000uL ||
-                    number(f[8]) != 1uL ||
-                    number(f[9]) != 5560uL ||
-                    number(f[10]) != 1uL ||
-                    number(f[11]) != 1uL ||
-                    bitrate !in codec.minimumBitrate..80_000_000L
-                ) {
+                val exactCodec = number(f[3]).toInt() == codec.wire
+                val exactSize = number(dimensions[0]) == 2456uL && number(dimensions[1]) == 1600uL
+                val exactStream = number(f[6]) == 60000uL && bitrate in codec.minimumBitrate..80_000_000L
+                val exactTransport = number(f[8]) == 1uL && number(f[9]) == 5560uL
+                val exactInput = number(f[10]) == 1uL && number(f[11]) == 1uL
+                val exactMedia = exactCodec && exactSize && exactStream
+                if (!exactMedia || !exactTransport || !exactInput) {
                     throw WireException("exact session config mismatch")
                 }
                 HostEvent.Configure(

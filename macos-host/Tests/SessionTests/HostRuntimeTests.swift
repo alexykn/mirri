@@ -97,7 +97,7 @@ final class HostRuntimeTests: XCTestCase {
   }
   func testOptionalDecoderLowLatencyDoesNotRejectExactHardware() throws {
     let original = try hello()
-    guard case .hello(let greeting) = try ClientEvent.decode(original) else {
+    guard case .hello = try ClientEvent.decode(original) else {
       return XCTFail("fixture is not ClientHello")
     }
     let software = CodecOffer(
@@ -186,8 +186,13 @@ final class HostRuntimeTests: XCTestCase {
   }
   @MainActor func testCoordinatorClaimsStopAndRejectsStaleTransportCallback() async {
     var snapshots: [HostState] = []
+    let logDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: logDirectory) }
     let coordinator = SessionCoordinator(
-      permissions: { false }, status: { snapshots.append($0.state) })
+      permissions: { false }, status: { snapshots.append($0.state) },
+      logger: SessionLogger(directory: logDirectory)
+    )
     await coordinator.start(device: ADBDevice(serial: "synthetic", model: "synthetic"))
     let failed = await coordinator.current().state
     XCTAssertEqual(failed, .failed)
@@ -203,9 +208,14 @@ final class HostRuntimeTests: XCTestCase {
   }
   func testStopWaitsForTerminalCleanupAlreadyInProgress() async {
     let gate = PausedLifecycleStatus(message: HostFailure.permission.localizedDescription)
+    let logDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: logDirectory) }
     let coordinator = SessionCoordinator(
       permissions: { false },
-      status: { await gate.handle($0) })
+      status: { await gate.handle($0) },
+      logger: SessionLogger(directory: logDirectory)
+    )
     let start = Task {
       await coordinator.start(device: ADBDevice(serial: "synthetic", model: "synthetic"))
     }
@@ -231,8 +241,13 @@ final class HostRuntimeTests: XCTestCase {
   func testConcurrentStopWaitsForExistingStopCleanup() async {
     let gate = PausedLifecycleStatus(
       message: "Stopping stream, releasing input and owned resources")
+    let logDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: logDirectory) }
     let coordinator = SessionCoordinator(
-      permissions: { false }, status: { await gate.handle($0) })
+      permissions: { false }, status: { await gate.handle($0) },
+      logger: SessionLogger(directory: logDirectory)
+    )
     await coordinator.start(device: ADBDevice(serial: "synthetic", model: "synthetic"))
     let firstStop = Task { await coordinator.stop() }
     let entered = await gate.waitUntilEntered(timeout: .seconds(2))
@@ -626,20 +641,28 @@ final class HostRuntimeTests: XCTestCase {
     XCTAssertTrue(logical.hiDPI)
     XCTAssertTrue(
       DisplayReadback.matches(
-        logicalWidth: 1228, logicalHeight: 800, pixelWidth: 2456, pixelHeight: 1600,
-        refreshHz: 60, bounds: bounds, requested: logical))
+        .init(
+          logical: CGSize(width: 1228, height: 800), pixels: CGSize(width: 2456, height: 1600),
+          refreshHz: 60),
+        bounds: bounds, requested: logical))
     XCTAssertFalse(
       DisplayReadback.matches(
-        logicalWidth: 1228, logicalHeight: 800, pixelWidth: 1228, pixelHeight: 800,
-        refreshHz: 60, bounds: bounds, requested: logical))
+        .init(
+          logical: CGSize(width: 1228, height: 800), pixels: CGSize(width: 1228, height: 800),
+          refreshHz: 60),
+        bounds: bounds, requested: logical))
     XCTAssertFalse(
       DisplayReadback.matches(
-        logicalWidth: 2456, logicalHeight: 1600, pixelWidth: 2456, pixelHeight: 1600,
-        refreshHz: 60, bounds: bounds, requested: logical))
+        .init(
+          logical: CGSize(width: 2456, height: 1600), pixels: CGSize(width: 2456, height: 1600),
+          refreshHz: 60),
+        bounds: bounds, requested: logical))
     XCTAssertFalse(
       DisplayReadback.matches(
-        logicalWidth: 1228, logicalHeight: 800, pixelWidth: 2456, pixelHeight: 1600,
-        refreshHz: 59, bounds: bounds, requested: logical))
+        .init(
+          logical: CGSize(width: 1228, height: 800), pixels: CGSize(width: 2456, height: 1600),
+          refreshHz: 59),
+        bounds: bounds, requested: logical))
     let mapper = CoordinateMapper(bounds: bounds)
     XCTAssertEqual(mapper.point(x: 0, y: 0), CGPoint(x: -1228, y: 900))
     XCTAssertEqual(mapper.point(x: 1, y: 1), CGPoint(x: -1, y: 1699))
@@ -648,8 +671,10 @@ final class HostRuntimeTests: XCTestCase {
     XCTAssertEqual(native, .native)
     XCTAssertTrue(
       DisplayReadback.matches(
-        logicalWidth: 2456, logicalHeight: 1600, pixelWidth: 2456, pixelHeight: 1600,
-        refreshHz: 60, bounds: CGRect(x: 0, y: 0, width: 2456, height: 1600), requested: native))
+        .init(
+          logical: CGSize(width: 2456, height: 1600), pixels: CGSize(width: 2456, height: 1600),
+          refreshHz: 60),
+        bounds: CGRect(x: 0, y: 0, width: 2456, height: 1600), requested: native))
   }
   func testClientMetricsModeMustRemainExact() throws {
     let message = try XCTUnwrap(
@@ -698,20 +723,26 @@ final class HostRuntimeTests: XCTestCase {
     let retina = HostPreferences.LogicalSize.retina
     XCTAssertTrue(
       DisplayReadback.matchesMode(
-        logicalWidth: 2456, logicalHeight: 1600, pixelWidth: 2456, pixelHeight: 1600,
-        refreshHz: 60, requested: native))
+        .init(
+          logical: CGSize(width: 2456, height: 1600), pixels: CGSize(width: 2456, height: 1600),
+          refreshHz: 60),
+        requested: native))
     XCTAssertTrue(
       DisplayReadback.matchesMode(
-        logicalWidth: 1228, logicalHeight: 800, pixelWidth: 2456, pixelHeight: 1600,
-        refreshHz: 60, requested: retina))
+        .init(
+          logical: CGSize(width: 1228, height: 800), pixels: CGSize(width: 2456, height: 1600),
+          refreshHz: 60),
+        requested: retina))
     for (width, height, pixelsWide, pixelsHigh, hz) in [
       (1228, 800, 1228, 800, 60.0), (2456, 1600, 1228, 800, 60.0),
       (2456, 1600, 2456, 1600, 59.0), (2456, 1600, 2456, 1600, 90.0),
     ] {
       XCTAssertFalse(
         DisplayReadback.matchesMode(
-          logicalWidth: width, logicalHeight: height, pixelWidth: pixelsWide,
-          pixelHeight: pixelsHigh, refreshHz: hz, requested: native))
+          .init(
+            logical: CGSize(width: width, height: height),
+            pixels: CGSize(width: pixelsWide, height: pixelsHigh), refreshHz: hz),
+          requested: native))
     }
   }
   func testDisplayGeometryFormatsOnlyBoundedNumericRoles() {
@@ -790,6 +821,12 @@ final class HostRuntimeTests: XCTestCase {
   }
   func testFixedStageHistogramQuantilesBucketsAndReset() {
     var histogram = StageTimingHistogram()
+    XCTAssertTrue(histogram.isEmpty)
+    XCTAssertTrue(histogram.observe(0))
+    XCTAssertFalse(histogram.isEmpty)
+    XCTAssertEqual(histogram.count, 1)
+    XCTAssertEqual(histogram.drain().count, 1)
+    XCTAssertTrue(histogram.isEmpty)
     for millis: UInt64 in [1, 5, 30, 100, 200] {
       XCTAssertTrue(histogram.observe(millis * 1_000_000))
     }
@@ -800,6 +837,7 @@ final class HostRuntimeTests: XCTestCase {
     XCTAssertEqual(histogram.maxNs, 200_000_000)
     let snapshot = histogram.drain()
     XCTAssertEqual(snapshot.count, 5)
+    XCTAssertTrue(histogram.isEmpty)
     XCTAssertEqual(histogram.count, 0)
     XCTAssertEqual(snapshot.encoded().split(separator: ":")[5].split(separator: ".").count, 59)
     XCTAssertTrue(histogram.observe(11_000_000_000))

@@ -47,6 +47,35 @@ public struct WireOrder: Sendable {
     }
     nextSequence += 1
   }
+  private func envelope(_ type: MessageKind, fields: [WireValue]) throws -> (UInt64, Data?) {
+    if type == .clientHello || type == .videoHello {
+      guard case .integer(let epoch) = fields[0] else { throw WireFailure.malformed }
+      if type == .videoHello {
+        guard case .bytes(let id) = fields[1] else { throw WireFailure.malformed }
+        return (epoch, id)
+      }
+      return (epoch, nil)
+    }
+    guard case .bytes(let id) = fields[0], case .integer(let epoch) = fields[1] else {
+      throw WireFailure.malformed
+    }
+    return (epoch, id)
+  }
+  private mutating func acceptVideo(_ type: MessageKind, fields: [WireValue]) throws {
+    guard case .integer(let incomingGeneration) = fields[2] else { throw WireFailure.malformed }
+    if type == .codecConfig {
+      guard incomingGeneration == generation + 1 else { throw WireFailure.malformed }
+      generation = incomingGeneration
+      nextFrame = 0
+      needsIDR = true
+    } else {
+      guard incomingGeneration == generation, !needsIDR || (fields[5] == .integer(3)),
+        case .integer(let frame) = fields[3], frame == nextFrame, frame != UInt64.max
+      else { throw WireFailure.malformed }
+      nextFrame += 1
+      needsIDR = false
+    }
+  }
   public mutating func accept(_ message: WireMessage) throws {
     guard let type = MessageKind(rawValue: message.type) else { throw WireFailure.malformed }
     let permitted: Bool
@@ -66,42 +95,12 @@ public struct WireOrder: Sendable {
       nextSequence != 0 || type == first
         || (channel == .control && peer == .host && type == .protocolError)
     else { throw WireFailure.malformed }
-    let fields = message.fields
-    let messageEpoch: UInt64
-    let id: Data?
-    if type == .clientHello || type == .videoHello {
-      guard case .integer(let e) = fields[0] else { throw WireFailure.malformed }
-      messageEpoch = e
-      if type == .videoHello {
-        guard case .bytes(let b) = fields[1] else { throw WireFailure.malformed }
-        id = b
-      } else {
-        id = nil
-      }
-    } else {
-      guard case .bytes(let b) = fields[0], case .integer(let e) = fields[1] else {
-        throw WireFailure.malformed
-      }
-      id = b
-      messageEpoch = e
-    }
+    let (messageEpoch, id) = try envelope(type, fields: message.fields)
     guard messageEpoch == epoch, sessionId == nil || id == sessionId else {
       throw WireFailure.malformed
     }
     if channel == .video && peer == .host {
-      guard case .integer(let g) = fields[2] else { throw WireFailure.malformed }
-      if type == .codecConfig {
-        guard g == generation + 1 else { throw WireFailure.malformed }
-        generation = g
-        nextFrame = 0
-        needsIDR = true
-      } else {
-        guard g == generation, !needsIDR || (fields[5] == .integer(3)),
-          case .integer(let frame) = fields[3], frame == nextFrame, frame != UInt64.max
-        else { throw WireFailure.malformed }
-        nextFrame += 1
-        needsIDR = false
-      }
+      try acceptVideo(type, fields: message.fields)
     }
     nextSequence += 1
   }

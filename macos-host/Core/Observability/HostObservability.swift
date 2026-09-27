@@ -207,8 +207,10 @@ public final class MetricsCollector: @unchecked Sendable {
 /// OSLog is privacy-aware; bounded local operational log never includes identifiers or input paths.
 public final class SessionLogger: Sendable {
   private let logger = Logger(subsystem: "dev.mirri.host", category: "session")
-  private let files = RotatingLog()
-  public init() {}
+  private let files: RotatingLog
+  public init(directory: URL = SessionLogger.logFolder) {
+    files = RotatingLog(directory: directory)
+  }
   public func event(_ state: HostState) {
     logger.info("state: \(state.rawValue, privacy: .public)")
     files.append("state \(state.rawValue)")
@@ -231,7 +233,8 @@ public final class SessionLogger: Sendable {
 
 private final class RotatingLog: @unchecked Sendable {
   private let lock = NSLock()
-  private let directory = SessionLogger.logFolder
+  private let directory: URL
+  init(directory: URL) { self.directory = directory }
   func append(_ line: String) {
     lock.lock()
     defer { lock.unlock() }

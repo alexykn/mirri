@@ -12,23 +12,28 @@ public struct ActiveDisplay: Sendable {
 }
 
 public enum DisplayReadback {
+  public struct Mode {
+    public let logical: CGSize
+    public let pixels: CGSize
+    public let refreshHz: Double
+    public init(logical: CGSize, pixels: CGSize, refreshHz: Double) {
+      self.logical = logical
+      self.pixels = pixels
+      self.refreshHz = refreshHz
+    }
+  }
   public static func matchesMode(
-    logicalWidth: Int, logicalHeight: Int, pixelWidth: Int, pixelHeight: Int,
-    refreshHz: Double, requested: HostPreferences.LogicalSize
+    _ mode: Mode, requested: HostPreferences.LogicalSize
   ) -> Bool {
-    logicalWidth == requested.width && logicalHeight == requested.height
-      && pixelWidth == 2456 && pixelHeight == 1600
-      && abs(refreshHz - 60) < 0.01
+    mode.logical == CGSize(width: requested.width, height: requested.height)
+      && mode.pixels == CGSize(width: 2456, height: 1600)
+      && abs(mode.refreshHz - 60) < 0.01
   }
   /// Fail closed if macOS publishes another logical mode, pixel backing or refresh.
   public static func matches(
-    logicalWidth: Int, logicalHeight: Int, pixelWidth: Int, pixelHeight: Int,
-    refreshHz: Double, bounds: CGRect, requested: HostPreferences.LogicalSize
+    _ mode: Mode, bounds: CGRect, requested: HostPreferences.LogicalSize
   ) -> Bool {
-    matchesMode(
-      logicalWidth: logicalWidth, logicalHeight: logicalHeight,
-      pixelWidth: pixelWidth, pixelHeight: pixelHeight,
-      refreshHz: refreshHz, requested: requested)
+    matchesMode(mode, requested: requested)
       && abs(bounds.width - CGFloat(requested.width)) < 0.01
       && abs(bounds.height - CGFloat(requested.height)) < 0.01
   }
@@ -80,16 +85,45 @@ struct DisplayGeometry {
   public private(set) var active: ActiveDisplay?
 
   public init() {}
-  public func create(logicalSize: HostPreferences.LogicalSize) async throws -> ActiveDisplay {
-    if let controller {
-      guard let current = Self.verified(controller.displayID, logicalSize: logicalSize) else {
-        throw HostFailure.exactDisplay
+  private func verifiedPublished(
+    _ owned: VirtualDisplayController, logicalSize: HostPreferences.LogicalSize,
+    serial: UInt32, attempts: Int
+  ) async throws -> ActiveDisplay? {
+    for _ in 0..<attempts {
+      guard controller === owned else { throw HostFailure.exactDisplay }
+      if let published = Self.verified(owned.displayID, logicalSize: logicalSize) {
+        logger.display("verified \(Self.readback(owned.displayID))")
+        active = published
+        logGeometry("verifiedCreate", ownedID: owned.displayID, serial: serial)
+        return published
       }
-      active = current
-      return current
+      try await Task.sleep(for: .milliseconds(100))
     }
-    logGeometry("beforeCreate")
-    let owned = VirtualDisplayController()
+    return nil
+  }
+  private func selectExactMode(
+    _ owned: VirtualDisplayController, logicalSize: HostPreferences.LogicalSize, serial: UInt32
+  ) throws {
+    guard controller === owned else { throw HostFailure.exactDisplay }
+    let id = owned.displayID
+    // Never select on a borrowed/reused ID or a different live display.
+    guard id != 0, CGDisplayIsOnline(id) != 0,
+      CGDisplayVendorNumber(id) == 0x4D52_5249,
+      CGDisplayModelNumber(id) == 0x2456,
+      CGDisplaySerialNumber(id) == serial
+    else { throw HostFailure.exactDisplay }
+    guard let candidate = Self.exactMode(id, logicalSize: logicalSize) else {
+      logger.display(
+        "exact selectable mode absent observed \(Self.readback(id)) "
+          + "available \(Self.availableModes(id)) duplicates \(Self.availableModes(id, includeDuplicates: true))"
+      )
+      throw HostFailure.exactDisplay
+    }
+    let result = CGDisplaySetDisplayMode(id, candidate, nil)
+    logger.display("owned exact mode selection CGError=\(result.rawValue)")
+    guard result == .success else { throw HostFailure.exactDisplay }
+  }
+  private func availableIdentity() throws -> UInt32 {
     // Never tear down an unrelated live display with our stable identity.
     var serial: UInt32 = 0x4D49_5252
     for attempt in 0..<8 {
@@ -100,6 +134,19 @@ struct DisplayGeometry {
       logger.display("identity unavailable for eight candidate slots")
       throw HostFailure.exactDisplay
     }
+    return serial
+  }
+  public func create(logicalSize: HostPreferences.LogicalSize) async throws -> ActiveDisplay {
+    if let controller {
+      guard let current = Self.verified(controller.displayID, logicalSize: logicalSize) else {
+        throw HostFailure.exactDisplay
+      }
+      active = current
+      return current
+    }
+    logGeometry("beforeCreate")
+    let owned = VirtualDisplayController()
+    let serial = try availableIdentity()
     do {
       try owned.create(
         withSerial: serial, logicalWidth: UInt32(logicalSize.width),
@@ -115,44 +162,17 @@ struct DisplayGeometry {
     controller = owned
     do {
       // Allow the newly published mode to settle before one explicit selection.
-      for _ in 0..<3 {
-        guard controller === owned else { throw HostFailure.exactDisplay }
-        if let published = Self.verified(owned.displayID, logicalSize: logicalSize) {
-          logger.display("verified \(Self.readback(owned.displayID))")
-          active = published
-          logGeometry("verifiedCreate", ownedID: owned.displayID, serial: serial)
-          return published
-        }
-        try await Task.sleep(for: .milliseconds(100))
-      }
-      guard controller === owned else { throw HostFailure.exactDisplay }
-      let id = owned.displayID
-      // Never select on a borrowed/reused ID or a different live display.
-      guard id != 0, CGDisplayIsOnline(id) != 0,
-        CGDisplayVendorNumber(id) == 0x4D52_5249,
-        CGDisplayModelNumber(id) == 0x2456,
-        CGDisplaySerialNumber(id) == serial
-      else { throw HostFailure.exactDisplay }
-      guard let candidate = Self.exactMode(id, logicalSize: logicalSize) else {
-        logger.display(
-          "exact selectable mode absent observed \(Self.readback(id)) "
-            + "available \(Self.availableModes(id)) duplicates \(Self.availableModes(id, includeDuplicates: true))"
-        )
-        throw HostFailure.exactDisplay
+      if let published = try await verifiedPublished(
+        owned, logicalSize: logicalSize, serial: serial, attempts: 3)
+      {
+        return published
       }
       // Single attempt on our owned display only; no global defaults or toggle loop.
-      let result = CGDisplaySetDisplayMode(id, candidate, nil)
-      logger.display("owned exact mode selection CGError=\(result.rawValue)")
-      guard result == .success else { throw HostFailure.exactDisplay }
-      for _ in 0..<30 {
-        guard controller === owned else { throw HostFailure.exactDisplay }
-        if let published = Self.verified(id, logicalSize: logicalSize) {
-          logger.display("verified \(Self.readback(id))")
-          active = published
-          logGeometry("verifiedCreate", ownedID: id, serial: serial)
-          return published
-        }
-        try await Task.sleep(for: .milliseconds(100))
+      try selectExactMode(owned, logicalSize: logicalSize, serial: serial)
+      if let published = try await verifiedPublished(
+        owned, logicalSize: logicalSize, serial: serial, attempts: 30)
+      {
+        return published
       }
       logger.display(
         "verification timed out requested \(logicalSize.width)x\(logicalSize.height) "
@@ -281,9 +301,10 @@ struct DisplayGeometry {
     guard let modes = displayModes(id, includeDuplicates: true) else { return nil }
     return modes.first {
       DisplayReadback.matchesMode(
-        logicalWidth: $0.width, logicalHeight: $0.height,
-        pixelWidth: $0.pixelWidth, pixelHeight: $0.pixelHeight,
-        refreshHz: $0.refreshRate, requested: logicalSize)
+        .init(
+          logical: CGSize(width: $0.width, height: $0.height),
+          pixels: CGSize(width: $0.pixelWidth, height: $0.pixelHeight), refreshHz: $0.refreshRate),
+        requested: logicalSize)
     }
   }
   private static func verified(
@@ -294,9 +315,10 @@ struct DisplayGeometry {
     let bounds = CGDisplayBounds(id)
     guard
       DisplayReadback.matches(
-        logicalWidth: mode.width, logicalHeight: mode.height,
-        pixelWidth: mode.pixelWidth, pixelHeight: mode.pixelHeight,
-        refreshHz: mode.refreshRate, bounds: bounds, requested: logicalSize)
+        .init(
+          logical: CGSize(width: mode.width, height: mode.height),
+          pixels: CGSize(width: mode.pixelWidth, height: mode.pixelHeight),
+          refreshHz: mode.refreshRate), bounds: bounds, requested: logicalSize)
     else { return nil }
     return ActiveDisplay(
       id: id, bounds: bounds, refreshHz: mode.refreshRate, logicalSize: logicalSize)

@@ -73,39 +73,42 @@ public final class InputController: @unchecked Sendable {
       }
     }
   }
+  private func pointers(batch: UInt64, samples: [PointerReading]) throws {
+    try pointer.beginBatch(batch)
+    for sample in samples {
+      let location = point(sample.point)
+      try pointer.accept(id: sample.id, phase: sample.phase, time: sample.time)
+      // Pen/eraser have the same button ownership; pressure is included in tablet fields.
+      if sample.phase == .down {
+        if sample.tool != .finger {
+          proximity(enter: true)
+          penActive = true
+        }
+        postPointer(.leftMouseDown, at: location, tool: sample.tool, pressure: sample.pressure)
+      } else if sample.phase == .move {
+        postPointer(.leftMouseDragged, at: location, tool: sample.tool, pressure: sample.pressure)
+      } else if sample.phase == .up || sample.phase == .cancel {
+        mouse(.leftMouseUp, at: location)
+        if penActive {
+          proximity(enter: false)
+          penActive = false
+        }
+      } else if sample.phase == .hoverEnter || sample.phase == .hoverMove
+        || sample.phase == .hoverExit
+      {
+        mouse(.mouseMoved, at: location)
+      }
+      if sample.tool != .finger && (sample.phase == .down || sample.phase == .move) {
+        tabletPoint(at: location, sample: sample)
+      }
+    }
+  }
   public func handle(_ message: RemoteInput) throws {
     lock.lock()
     defer { lock.unlock() }
     switch message {
     case .pointers(let batch, let samples):
-      try pointer.beginBatch(batch)
-      for sample in samples {
-        let location = point(sample.point)
-        try pointer.accept(id: sample.id, phase: sample.phase, time: sample.time)
-        // Pen/eraser have the same button ownership; pressure is included in tablet fields.
-        if sample.phase == .down {
-          if sample.tool != .finger {
-            proximity(enter: true)
-            penActive = true
-          }
-          postPointer(.leftMouseDown, at: location, tool: sample.tool, pressure: sample.pressure)
-        } else if sample.phase == .move {
-          postPointer(.leftMouseDragged, at: location, tool: sample.tool, pressure: sample.pressure)
-        } else if sample.phase == .up || sample.phase == .cancel {
-          mouse(.leftMouseUp, at: location)
-          if penActive {
-            proximity(enter: false)
-            penActive = false
-          }
-        } else if sample.phase == .hoverEnter || sample.phase == .hoverMove
-          || sample.phase == .hoverExit
-        {
-          mouse(.mouseMoved, at: location)
-        }
-        if sample.tool != .finger && (sample.phase == .down || sample.phase == .move) {
-          tabletPoint(at: location, sample: sample)
-        }
-      }
+      try pointers(batch: batch, samples: samples)
     case .scroll(let phase, let position, let dx, let dy):
       let location = point(position)
       mouse(.mouseMoved, at: location)

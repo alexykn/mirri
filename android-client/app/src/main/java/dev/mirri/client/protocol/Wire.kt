@@ -49,7 +49,8 @@ data class WireMessage(
 
 class WireException(
     message: String,
-) : IllegalArgumentException(message)
+    cause: Throwable? = null,
+) : IllegalArgumentException(message, cause)
 
 /** No sockets, video codecs, platform state, or unbounded allocations. */
 object WireCodec {
@@ -98,35 +99,34 @@ object WireCodec {
         val f = message.fields
         when (message.type) {
             1 -> if (size(f[3]) != (1600uL to 2456uL) || number(f[4]) !in 1uL..1200uL) bad()
-            2 -> {
-                val codec = number(f[2])
-                val bitrate = number(f[7])
-                val range = if (codec == 1uL) 20_000_000uL..80_000_000uL else 25_000_000uL..80_000_000uL
-                if (codec != number(f[3]) ||
-                    size(f[5]) != (2456uL to 1600uL) ||
-                    number(f[6]) != 60000uL ||
-                    bitrate !in range
-                ) {
-                    bad()
-                }
-            }
+            2 -> validateConfig(f)
             3 -> if (size(f[4]) != (2456uL to 1600uL) || !exactPhysicalMode(f[2])) bad()
-            5 -> {
-                val codec = number(f[3])
-                val sets = (f[7] as? Value.Items)?.value ?: bad()
-                if (codec != number(f[4]) || sets.size != (if (codec == 1uL) 2 else 3)) bad()
-                sets.forEachIndexed { index, set ->
-                    val nal = (set as? Value.Bytes)?.value ?: bad()
-                    if (nal.size < (if (codec == 1uL) 1 else 2)) bad()
-                    val actual = if (codec == 1uL) nal[0].toInt() and 0x1f else (nal[0].toInt() ushr 1) and 0x3f
-                    val expected = if (codec == 1uL) listOf(7, 8)[index] else listOf(32, 33, 34)[index]
-                    if (actual != expected) bad()
-                }
-            }
+            5 -> validateParameters(f)
             6 -> {
                 val au = (f[6] as? Value.Bytes)?.value ?: bad()
                 if (au.size < 5 || !au.copyOfRange(0, 4).contentEquals(byteArrayOf(0, 0, 0, 1))) bad()
             }
+        }
+    }
+
+    private fun validateConfig(f: List<Value>) {
+        val codec = number(f[2])
+        val bitrate = number(f[7])
+        val range = if (codec == 1uL) 20_000_000uL..80_000_000uL else 25_000_000uL..80_000_000uL
+        val format = codec == number(f[3]) && size(f[5]) == (2456uL to 1600uL)
+        if (!format || number(f[6]) != 60000uL || bitrate !in range) bad()
+    }
+
+    private fun validateParameters(f: List<Value>) {
+        val codec = number(f[3])
+        val sets = (f[7] as? Value.Items)?.value ?: bad()
+        if (codec != number(f[4]) || sets.size != (if (codec == 1uL) 2 else 3)) bad()
+        sets.forEachIndexed { index, set ->
+            val nal = (set as? Value.Bytes)?.value ?: bad()
+            if (nal.size < (if (codec == 1uL) 1 else 2)) bad()
+            val actual = if (codec == 1uL) nal[0].toInt() and 0x1f else (nal[0].toInt() ushr 1) and 0x3f
+            val expected = if (codec == 1uL) listOf(7, 8)[index] else listOf(32, 33, 34)[index]
+            if (actual != expected) bad()
         }
     }
 
@@ -259,46 +259,74 @@ object WireCodec {
             spec.zip(fields).forEach { (child, field) -> write(out, child, field) }
             return
         }
-        list(t)?.let { (max, child) ->
-            val items = (value as? Value.Items)?.value ?: bad()
-            if (items.size > max) bad()
-            writeNumber(out, items.size.toULong(), 1)
-            items.forEach { write(out, child, it) }
-            return
-        }
-        if (t == "i32") {
-            writeNumber(out, ((value as? Value.Signed)?.value ?: bad()).toUInt().toULong(), 4)
-            return
-        }
-        if (t in listOf("unit", "tilt", "orientation", "delta", "scale", "fps")) {
-            val n = (value as? Value.Real)?.value ?: bad()
-            validateReal(t, n)
-            writeNumber(out, n.toRawBits().toUInt().toULong(), 4)
-            return
-        }
-        stringLimit(t)?.let { max ->
-            val bytes = validateText((value as? Value.Text)?.value ?: bad(), max)
-            writeNumber(out, bytes.size.toULong(), 2)
-            out.write(bytes)
-            return
-        }
-        if (t in listOf("bytes16", "bytes32", "param", "au")) {
-            val bytes = (value as? Value.Bytes)?.value ?: bad()
-            val valid =
-                when (t) {
-                    "bytes16" -> bytes.size == 16
-                    "bytes32" -> bytes.size == 32
-                    "param" -> bytes.size in 1..4096
-                    else -> bytes.size in 1..16_777_216
-                }
-            if (!valid) bad()
-            if (t == "param" || t == "au") writeNumber(out, bytes.size.toULong(), if (t == "param") 2 else 4)
-            out.write(bytes)
-            return
-        }
+        if (writeList(out, t, value)) return
+        if (writeScalar(out, t, value)) return
+        if (writeText(out, t, value)) return
+        if (writeBytes(out, t, value)) return
         val n = (value as? Value.Number)?.value ?: bad()
         validateNumber(t, n)
         writeNumber(out, n, width(t))
+    }
+
+    private fun writeList(
+        out: ByteArrayOutputStream,
+        t: String,
+        value: Value,
+    ): Boolean {
+        val (max, child) = list(t) ?: return false
+        val items = (value as? Value.Items)?.value ?: bad()
+        if (items.size > max) bad()
+        writeNumber(out, items.size.toULong(), 1)
+        items.forEach { write(out, child, it) }
+        return true
+    }
+
+    private fun writeText(
+        out: ByteArrayOutputStream,
+        t: String,
+        value: Value,
+    ): Boolean {
+        val max = stringLimit(t) ?: return false
+        val bytes = validateText((value as? Value.Text)?.value ?: bad(), max)
+        writeNumber(out, bytes.size.toULong(), 2)
+        out.write(bytes)
+        return true
+    }
+
+    private fun writeScalar(
+        out: ByteArrayOutputStream,
+        t: String,
+        value: Value,
+    ): Boolean {
+        if (t == "i32") {
+            writeNumber(out, ((value as? Value.Signed)?.value ?: bad()).toUInt().toULong(), 4)
+            return true
+        }
+        if (t !in listOf("unit", "tilt", "orientation", "delta", "scale", "fps")) return false
+        val n = (value as? Value.Real)?.value ?: bad()
+        validateReal(t, n)
+        writeNumber(out, n.toRawBits().toUInt().toULong(), 4)
+        return true
+    }
+
+    private fun writeBytes(
+        out: ByteArrayOutputStream,
+        t: String,
+        value: Value,
+    ): Boolean {
+        if (t !in listOf("bytes16", "bytes32", "param", "au")) return false
+        val bytes = (value as? Value.Bytes)?.value ?: bad()
+        val valid =
+            when (t) {
+                "bytes16" -> bytes.size == 16
+                "bytes32" -> bytes.size == 32
+                "param" -> bytes.size in 1..4096
+                else -> bytes.size in 1..16_777_216
+            }
+        if (!valid) bad()
+        if (t == "param" || t == "au") writeNumber(out, bytes.size.toULong(), if (t == "param") 2 else 4)
+        out.write(bytes)
+        return true
     }
 
     private class Reader(
@@ -321,44 +349,54 @@ object WireCodec {
 
         fun read(t: String): Value {
             children(t)?.let { return Value.Object(it.map(::read)) }
-            list(t)?.let { (max, child) ->
-                val count = number(1).toInt()
-                if (count > max) bad()
-                return Value.Items(List(count) { read(child) })
-            }
+            list(t)?.let { (max, child) -> return readList(max, child) }
             if (t == "i32") return Value.Signed(number(4).toUInt().toInt())
-            if (t in listOf("unit", "tilt", "orientation", "delta", "scale", "fps")) {
-                val n = Float.fromBits(number(4).toUInt().toInt())
-                validateReal(t, n)
-                return Value.Real(n)
-            }
-            stringLimit(t)?.let { max ->
-                val length = number(2).toInt()
-                if (length > max) bad()
-                val decoder =
-                    Charsets.UTF_8
-                        .newDecoder()
-                        .onMalformedInput(
-                            CodingErrorAction.REPORT,
-                        ).onUnmappableCharacter(CodingErrorAction.REPORT)
-                val s =
-                    try {
-                        decoder.decode(ByteBuffer.wrap(take(length))).toString()
-                    } catch (_: Exception) {
-                        bad()
-                    }
-                validateText(s, max)
-                return Value.Text(s)
-            }
+            if (t in listOf("unit", "tilt", "orientation", "delta", "scale", "fps")) return readReal(t)
+            stringLimit(t)?.let { max -> return readText(max) }
             if (t == "bytes16" || t == "bytes32") return Value.Bytes(take(if (t == "bytes16") 16 else 32))
-            if (t == "param" || t == "au") {
-                val length = number(if (t == "param") 2 else 4)
-                if (length < 1uL || length > (if (t == "param") 4096uL else 16_777_216uL)) bad()
-                return Value.Bytes(take(length.toInt()))
-            }
+            if (t == "param" || t == "au") return readVariableBytes(t)
             val n = number(width(t))
             validateNumber(t, n)
             return Value.Number(n)
+        }
+
+        private fun readList(
+            max: Int,
+            child: String,
+        ): Value.Items {
+            val count = number(1).toInt()
+            if (count > max) bad()
+            return Value.Items(List(count) { read(child) })
+        }
+
+        private fun readVariableBytes(t: String): Value.Bytes {
+            val length = number(if (t == "param") 2 else 4)
+            if (length < 1uL || length > (if (t == "param") 4096uL else 16_777_216uL)) bad()
+            return Value.Bytes(take(length.toInt()))
+        }
+
+        private fun readReal(t: String): Value.Real {
+            val n = Float.fromBits(number(4).toUInt().toInt())
+            validateReal(t, n)
+            return Value.Real(n)
+        }
+
+        private fun readText(max: Int): Value.Text {
+            val length = number(2).toInt()
+            if (length > max) bad()
+            val decoder =
+                Charsets.UTF_8
+                    .newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+            val s =
+                try {
+                    decoder.decode(ByteBuffer.wrap(take(length))).toString()
+                } catch (_: Exception) {
+                    bad()
+                }
+            validateText(s, max)
+            return Value.Text(s)
         }
     }
 
@@ -387,17 +425,31 @@ object WireCodec {
         videoChannel: Boolean = false,
     ): Int {
         if (header.size != 32) bad()
-        if (!header.copyOfRange(0, 4).contentEquals("MRRI".toByteArray(Charsets.US_ASCII))) bad()
-        if (header[4] != 0.toByte() || header[5] != 1.toByte()) bad()
+        validateHeaderPrefix(header)
         val minor = ((header[6].toInt() and 255) shl 8) or (header[7].toInt() and 255)
         val type = ((header[8].toInt() and 255) shl 8) or (header[9].toInt() and 255)
-        if (header[10] != 0.toByte() || header[11] != 0.toByte()) bad()
-        if (type !in definitions && (minor == 0 || type and 0x8000 == 0)) bad()
-        if (videoChannel && type !in setOf(4, 5, 6) && (minor == 0 || type and 0x8000 == 0)) bad()
+        validateHeaderType(header, minor, type, videoChannel)
         val size = header.copyOfRange(20, 24).fold(0uL) { n, byte -> (n shl 8) or byte.toUByte().toULong() }
         val limit = if (videoChannel && type !in definitions) 65_536 else cap(type)
         if (size > limit.toULong()) bad()
         return size.toInt()
+    }
+
+    private fun validateHeaderPrefix(header: ByteArray) {
+        if (!header.copyOfRange(0, 4).contentEquals("MRRI".toByteArray(Charsets.US_ASCII))) bad()
+        if (header[4] != 0.toByte() || header[5] != 1.toByte()) bad()
+    }
+
+    private fun validateHeaderType(
+        header: ByteArray,
+        minor: Int,
+        type: Int,
+        videoChannel: Boolean,
+    ) {
+        if (header[10] != 0.toByte() || header[11] != 0.toByte()) bad()
+        val futureExtension = minor != 0 && type and 0x8000 != 0
+        if (type !in definitions && !futureExtension) bad()
+        if (videoChannel && type !in setOf(4, 5, 6) && !futureExtension) bad()
     }
 
     /** Returns null only for bounded ignorable future-minor extension types. */

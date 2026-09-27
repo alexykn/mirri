@@ -162,8 +162,9 @@ public final class VideoEncoder: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     guard let session else { return false }
-    if origin == nil { origin = time }
-    let pts = CMTimeSubtract(time, origin!)
+    let first = origin ?? time
+    if origin == nil { origin = first }
+    let pts = CMTimeSubtract(time, first)
     let force = forceIDR
     let options: CFDictionary? =
       force ? [kVTEncodeFrameOptionKey_ForceKeyFrame as String: true] as CFDictionary : nil
@@ -267,8 +268,9 @@ public final class VideoEncoder: @unchecked Sendable {
       // bounded access unit; never assume the first segment covers it all.
       var copied = Data(count: total)
       let status = copied.withUnsafeMutableBytes {
-        CMBlockBufferCopyDataBytes(
-          data, atOffset: 0, dataLength: total, destination: $0.baseAddress!)
+        guard let address = $0.baseAddress else { return kCMBlockBufferBadLengthParameterErr }
+        return CMBlockBufferCopyDataBytes(
+          data, atOffset: 0, dataLength: total, destination: address)
       }
       guard status == noErr else { return nil }
       out = copied.withUnsafeBytes { annexB($0) }

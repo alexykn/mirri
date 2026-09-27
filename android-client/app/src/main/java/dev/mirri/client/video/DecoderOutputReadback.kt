@@ -11,17 +11,27 @@ internal object DecoderOutputReadback {
         bottom: Int?,
     ): Boolean {
         if (codedWidth <= 0 || codedHeight <= 0) return false
-        if (left == null && top == null && right == null && bottom == null) {
+        val crop = listOfNotNull(left, top, right, bottom)
+        if (crop.isEmpty()) {
             return codedWidth == 2456 && codedHeight == 1600
         }
-        if (left == null || top == null || right == null || bottom == null) return false
-        return left >= 0 &&
-            top >= 0 &&
-            right >= left &&
-            bottom >= top &&
-            right < codedWidth &&
-            bottom < codedHeight &&
-            right.toLong() - left + 1 == 2456L &&
-            bottom.toLong() - top + 1 == 1600L
+        if (crop.size != 4) return false
+        return exactCrop(codedWidth, codedHeight, crop)
+    }
+
+    private fun exactCrop(
+        codedWidth: Int,
+        codedHeight: Int,
+        crop: List<Int>,
+    ): Boolean {
+        val l = crop[0]
+        val t = crop[1]
+        val r = crop[2]
+        val b = crop[3]
+        val topLeftValid = l >= 0 && t >= 0
+        val bottomRightValid = r >= l && b >= t
+        val withinImage = r < codedWidth && b < codedHeight
+        val exactSize = r.toLong() - l + 1 == 2456L && b.toLong() - t + 1 == 1600L
+        return topLeftValid && bottomRightValid && withinImage && exactSize
     }
 }

@@ -103,6 +103,15 @@ class TouchInterpreter(
         shortcutEmitted = false
     }
 
+    /** An accessibility-service click has no MotionEvent; use the center of the visible surface. */
+    fun accessibilityClick() {
+        val now = System.nanoTime()
+        val sample = Sample(0, 0.5f, 0.5f, 0.5f, 0f, 0f, now, PointerTool.FINGER, 0)
+        reset()
+        handle(listOf(sample), MotionEvent.ACTION_DOWN, now)
+        handle(listOf(sample), MotionEvent.ACTION_UP, now)
+    }
+
     fun handle(
         samples: List<Sample>,
         action: Int,
@@ -114,139 +123,198 @@ class TouchInterpreter(
         }
         val pen = samples.firstOrNull { it.tool != PointerTool.FINGER }
         if (pen != null) {
-            if (action == MotionEvent.ACTION_HOVER_ENTER ||
-                action == MotionEvent.ACTION_HOVER_MOVE ||
-                action == MotionEvent.ACTION_HOVER_EXIT
-            ) {
-                return
-            }
-            if (state != State.PEN_ACTIVE) {
-                reset()
-                state = State.PEN_ACTIVE
-                pointers(listOf(pen to PointerPhase.DOWN))
-            } else {
-                pointers(listOf(pen to if (action == MotionEvent.ACTION_UP) PointerPhase.UP else PointerPhase.MOVE))
-            }
-            last = listOf(pen)
-            if (action == MotionEvent.ACTION_UP) {
-                state = State.IDLE
-                cooldownUntil = time + 250_000_000L
-            }
+            handlePen(pen, action, time)
             return
         }
         if (state == State.PEN_ACTIVE || time < cooldownUntil) return
         val first = samples[0]
         if (action == MotionEvent.ACTION_DOWN) {
-            reset()
-            state = State.SINGLE_CANDIDATE
-            start = listOf(first)
-            last = listOf(first)
-            startTime = time
-            // Position the pointer without holding a mouse button.
-            pointers(listOf(first to PointerPhase.HOVER_ENTER, first to PointerPhase.HOVER_EXIT))
+            beginSingle(first, time)
             return
         }
         if (samples.size >= 3) {
-            if (state == State.SINGLE_DRAGGING) last.firstOrNull()?.let { pointers(listOf(it to PointerPhase.UP)) }
-            if (state != State.SHORTCUT) {
-                start = samples
-                startTime = time
-                state = State.SHORTCUT
-                shortcutEmitted = false
-            }
-            val origin = start.firstOrNull { it.id == first.id } ?: start[0]
-            val dx = first.x - origin.x
-            val dy = first.y - origin.y
-            if (!shortcutEmitted && (abs(dy) > 0.09f || abs(dx) > 0.09f)) {
-                val direction =
-                    if (abs(dy) >= abs(dx)) {
-                        if (dy < 0) ShortcutAction.MISSION_CONTROL else ShortcutAction.SHOW_DESKTOP
-                    } else {
-                        if (dx < 0) ShortcutAction.PREVIOUS_SPACE else ShortcutAction.NEXT_SPACE
-                    }
-                send(InputEvent.Shortcut(direction, time))
-                shortcutEmitted = true
-            }
-            last = samples
+            handleShortcut(samples, first, time)
             return
         }
-        if (samples.size == 2 && (state == State.SINGLE_CANDIDATE || state == State.SINGLE_DRAGGING || state == State.IDLE)) {
-            if (state == State.SINGLE_DRAGGING) last.firstOrNull()?.let { pointers(listOf(it to PointerPhase.UP)) }
-            state = State.MULTI_CANDIDATE
-            start = samples
-            last = samples
-            startTime = time
-            distance = span(samples)
-            scrollPoint = center(samples).let { it.x to it.y }
+        if (samples.size == 2 && canBeginMulti()) {
+            beginMulti(samples, time)
             return
         }
+        handleCurrent(samples, first, action, time)
+        last = samples
+    }
+
+    private fun canBeginMulti(): Boolean =
         when (state) {
-            State.SINGLE_CANDIDATE -> {
-                val origin = start[0]
-                if (action == MotionEvent.ACTION_UP) {
-                    if (hypot(first.x - origin.x, first.y - origin.y) < slop) {
-                        if (time - startTime > 550_000_000L) {
-                            send(InputEvent.Context(point(first), ContextSource.LONG_PRESS, time))
-                        } else {
-                            pointers(listOf(origin to PointerPhase.DOWN, first to PointerPhase.UP))
-                        }
-                    }
-                    state = State.IDLE
-                } else if (hypot(first.x - origin.x, first.y - origin.y) >= slop) {
-                    pointers(listOf(origin to PointerPhase.DOWN, first to PointerPhase.MOVE))
-                    state = State.SINGLE_DRAGGING
-                }
-            }
+            State.SINGLE_CANDIDATE, State.SINGLE_DRAGGING, State.IDLE -> true
+            else -> false
+        }
+
+    private fun isHover(action: Int): Boolean =
+        when (action) {
+            MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE, MotionEvent.ACTION_HOVER_EXIT -> true
+            else -> false
+        }
+
+    private fun handleCurrent(
+        samples: List<Sample>,
+        first: Sample,
+        action: Int,
+        time: Long,
+    ) {
+        when (state) {
+            State.SINGLE_CANDIDATE -> handleSingle(first, action, time)
             State.SINGLE_DRAGGING -> {
                 pointers(listOf(first to if (action == MotionEvent.ACTION_UP) PointerPhase.UP else PointerPhase.MOVE))
                 if (action == MotionEvent.ACTION_UP) state = State.IDLE
             }
-            State.MULTI_CANDIDATE, State.SCROLLING, State.PINCHING -> {
-                if (samples.size < 2 || action == MotionEvent.ACTION_UP) {
-                    if (state == State.MULTI_CANDIDATE &&
-                        time - startTime < 350_000_000L &&
-                        last.size == 2
-                    ) {
-                        send(InputEvent.Context(point(center(last)), ContextSource.TWO_FINGER_TAP, time))
-                    }
-                    if (state == State.SCROLLING) gesture(true, GesturePhase.ENDED, first, 0f)
-                    if (state == State.PINCHING) gesture(false, GesturePhase.ENDED, first, 1f)
-                    state = State.IDLE
-                } else {
-                    val c = center(samples)
-                    val span = span(samples)
-                    if (state == State.MULTI_CANDIDATE) {
-                        val translation = hypot(c.x - scrollPoint.first, c.y - scrollPoint.second)
-                        if (abs(span - distance) > slop * 1.5f &&
-                            abs(span - distance) > translation
-                        ) {
-                            state = State.PINCHING
-                            gesture(false, GesturePhase.BEGAN, c, 1f)
-                        } else if (translation > slop) {
-                            state = State.SCROLLING
-                            gesture(true, GesturePhase.BEGAN, c, 0f)
-                        }
-                    }
-                    if (state ==
-                        State.SCROLLING
-                    ) {
-                        gesture(
-                            true,
-                            GesturePhase.CHANGED,
-                            c,
-                            (c.x - scrollPoint.first) * 2456,
-                            (c.y - scrollPoint.second) * 1600,
-                        )
-                    }
-                    if (state == State.PINCHING && distance > 0) gesture(false, GesturePhase.CHANGED, c, span / distance)
-                    distance = span
-                    scrollPoint = c.x to c.y
-                }
-            }
+            State.MULTI_CANDIDATE, State.SCROLLING, State.PINCHING -> handleMulti(samples, first, action, time)
             State.SHORTCUT -> if (action == MotionEvent.ACTION_UP) state = State.IDLE
             else -> Unit
         }
+    }
+
+    private fun handlePen(
+        pen: Sample,
+        action: Int,
+        time: Long,
+    ) {
+        if (isHover(action)) return
+        if (state != State.PEN_ACTIVE) {
+            reset()
+            state = State.PEN_ACTIVE
+            pointers(listOf(pen to PointerPhase.DOWN))
+        } else {
+            pointers(listOf(pen to if (action == MotionEvent.ACTION_UP) PointerPhase.UP else PointerPhase.MOVE))
+        }
+        last = listOf(pen)
+        if (action == MotionEvent.ACTION_UP) {
+            state = State.IDLE
+            cooldownUntil = time + 250_000_000L
+        }
+    }
+
+    private fun beginSingle(
+        first: Sample,
+        time: Long,
+    ) {
+        reset()
+        state = State.SINGLE_CANDIDATE
+        start = listOf(first)
+        last = listOf(first)
+        startTime = time
+        pointers(listOf(first to PointerPhase.HOVER_ENTER, first to PointerPhase.HOVER_EXIT))
+    }
+
+    private fun handleShortcut(
+        samples: List<Sample>,
+        first: Sample,
+        time: Long,
+    ) {
+        if (state == State.SINGLE_DRAGGING) last.firstOrNull()?.let { pointers(listOf(it to PointerPhase.UP)) }
+        if (state != State.SHORTCUT) {
+            start = samples
+            startTime = time
+            state = State.SHORTCUT
+            shortcutEmitted = false
+        }
+        val origin = start.firstOrNull { it.id == first.id } ?: start[0]
+        val dx = first.x - origin.x
+        val dy = first.y - origin.y
+        if (!shortcutEmitted && (abs(dy) > 0.09f || abs(dx) > 0.09f)) {
+            val direction =
+                if (abs(dy) >= abs(dx)) {
+                    if (dy < 0) ShortcutAction.MISSION_CONTROL else ShortcutAction.SHOW_DESKTOP
+                } else {
+                    if (dx < 0) ShortcutAction.PREVIOUS_SPACE else ShortcutAction.NEXT_SPACE
+                }
+            send(InputEvent.Shortcut(direction, time))
+            shortcutEmitted = true
+        }
         last = samples
+    }
+
+    private fun beginMulti(
+        samples: List<Sample>,
+        time: Long,
+    ) {
+        if (state == State.SINGLE_DRAGGING) last.firstOrNull()?.let { pointers(listOf(it to PointerPhase.UP)) }
+        state = State.MULTI_CANDIDATE
+        start = samples
+        last = samples
+        startTime = time
+        distance = span(samples)
+        scrollPoint = center(samples).let { it.x to it.y }
+    }
+
+    private fun handleSingle(
+        first: Sample,
+        action: Int,
+        time: Long,
+    ) {
+        val origin = start[0]
+        val moved = hypot(first.x - origin.x, first.y - origin.y) >= slop
+        if (action == MotionEvent.ACTION_UP) {
+            if (!moved) {
+                if (time - startTime > 550_000_000L) {
+                    send(InputEvent.Context(point(first), ContextSource.LONG_PRESS, time))
+                } else {
+                    pointers(listOf(origin to PointerPhase.DOWN, first to PointerPhase.UP))
+                }
+            }
+            state = State.IDLE
+        } else if (moved) {
+            pointers(listOf(origin to PointerPhase.DOWN, first to PointerPhase.MOVE))
+            state = State.SINGLE_DRAGGING
+        }
+    }
+
+    private fun handleMulti(
+        samples: List<Sample>,
+        first: Sample,
+        action: Int,
+        time: Long,
+    ) {
+        if (samples.size < 2 || action == MotionEvent.ACTION_UP) {
+            endMulti(first, time)
+            return
+        }
+        val c = center(samples)
+        val nextSpan = span(samples)
+        if (state == State.MULTI_CANDIDATE) beginGesture(c, nextSpan)
+        if (state == State.SCROLLING) {
+            gesture(true, GesturePhase.CHANGED, c, (c.x - scrollPoint.first) * 2456, (c.y - scrollPoint.second) * 1600)
+        }
+        if (state == State.PINCHING && distance > 0) gesture(false, GesturePhase.CHANGED, c, nextSpan / distance)
+        distance = nextSpan
+        scrollPoint = c.x to c.y
+    }
+
+    private fun endMulti(
+        first: Sample,
+        time: Long,
+    ) {
+        if (state == State.MULTI_CANDIDATE && time - startTime < 350_000_000L && last.size == 2) {
+            send(InputEvent.Context(point(center(last)), ContextSource.TWO_FINGER_TAP, time))
+        }
+        if (state == State.SCROLLING) gesture(true, GesturePhase.ENDED, first, 0f)
+        if (state == State.PINCHING) gesture(false, GesturePhase.ENDED, first, 1f)
+        state = State.IDLE
+    }
+
+    private fun beginGesture(
+        c: Sample,
+        nextSpan: Float,
+    ) {
+        val translation = hypot(c.x - scrollPoint.first, c.y - scrollPoint.second)
+        val pinch = abs(nextSpan - distance) > slop * 1.5f && abs(nextSpan - distance) > translation
+        if (pinch) {
+            state = State.PINCHING
+            gesture(false, GesturePhase.BEGAN, c, 1f)
+        } else if (translation > slop) {
+            state = State.SCROLLING
+            gesture(true, GesturePhase.BEGAN, c, 0f)
+        }
     }
 
     fun auxiliary(event: KeyEvent): Boolean {
@@ -271,59 +339,62 @@ class TouchInterpreter(
     ): Boolean {
         if (width <= 0 || height <= 0) return true
 
-        fun copy(history: Int): List<Sample> =
-            (0 until event.pointerCount).map { i ->
-                val historical = history >= 0
-                val x = if (historical) event.getHistoricalX(i, history) else event.getX(i)
-                val y = if (historical) event.getHistoricalY(i, history) else event.getY(i)
-                val pressure = if (historical) event.getHistoricalPressure(i, history) else event.getPressure(i)
-                val tool =
-                    if (event.getToolType(i) ==
-                        MotionEvent.TOOL_TYPE_STYLUS
-                    ) {
-                        PointerTool.PEN
-                    } else if (event.getToolType(i) == MotionEvent.TOOL_TYPE_ERASER) {
-                        PointerTool.ERASER
-                    } else {
-                        PointerTool.FINGER
-                    }
-                val t = if (historical) event.getHistoricalEventTime(history) else event.eventTime
-                val tilt =
-                    if (historical) {
-                        event.getHistoricalAxisValue(
-                            MotionEvent.AXIS_TILT,
-                            i,
-                            history,
-                        )
-                    } else {
-                        event.getAxisValue(MotionEvent.AXIS_TILT, i)
-                    }
-                val orientation = if (historical) event.getHistoricalOrientation(i, history) else event.getOrientation(i)
-                val buttons = (event.buttonState and 3) or (if (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY != 0) 4 else 0)
-                Sample(
-                    event.getPointerId(i),
-                    (x / width).coerceIn(0f, 1f),
-                    (y / height).coerceIn(0f, 1f),
-                    pressure.coerceIn(0f, 1f),
-                    tilt,
-                    orientation,
-                    t * 1_000_000,
-                    tool,
-                    buttons,
-                )
-            }
         if (event.actionMasked ==
             MotionEvent.ACTION_MOVE
         ) {
             for (i in 0 until event.historySize) {
                 handle(
-                    copy(i),
+                    copy(event, width, height, i),
                     MotionEvent.ACTION_MOVE,
                     event.getHistoricalEventTime(i) * 1_000_000,
                 )
             }
         }
-        handle(copy(-1), event.actionMasked, event.eventTime * 1_000_000)
+        handle(copy(event, width, height, -1), event.actionMasked, event.eventTime * 1_000_000)
         return true
     }
+
+    private fun copy(
+        event: MotionEvent,
+        width: Int,
+        height: Int,
+        history: Int,
+    ): List<Sample> =
+        (0 until event.pointerCount).map { i ->
+            val historical = history >= 0
+            val x = if (historical) event.getHistoricalX(i, history) else event.getX(i)
+            val y = if (historical) event.getHistoricalY(i, history) else event.getY(i)
+            val pressure = if (historical) event.getHistoricalPressure(i, history) else event.getPressure(i)
+            val t = if (historical) event.getHistoricalEventTime(history) else event.eventTime
+            val tilt =
+                if (historical) {
+                    event.getHistoricalAxisValue(
+                        MotionEvent.AXIS_TILT,
+                        i,
+                        history,
+                    )
+                } else {
+                    event.getAxisValue(MotionEvent.AXIS_TILT, i)
+                }
+            val orientation = if (historical) event.getHistoricalOrientation(i, history) else event.getOrientation(i)
+            val buttons = (event.buttonState and 3) or (if (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY != 0) 4 else 0)
+            Sample(
+                event.getPointerId(i),
+                (x / width).coerceIn(0f, 1f),
+                (y / height).coerceIn(0f, 1f),
+                pressure.coerceIn(0f, 1f),
+                tilt,
+                orientation,
+                t * 1_000_000,
+                pointerTool(event.getToolType(i)),
+                buttons,
+            )
+        }
+
+    private fun pointerTool(type: Int): PointerTool =
+        when (type) {
+            MotionEvent.TOOL_TYPE_STYLUS -> PointerTool.PEN
+            MotionEvent.TOOL_TYPE_ERASER -> PointerTool.ERASER
+            else -> PointerTool.FINGER
+        }
 }

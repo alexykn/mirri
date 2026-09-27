@@ -49,7 +49,10 @@ private final class ProcessOutcome: @unchecked Sendable {
     if let data { resolve(data, status: status) }
   }
   private func resolve(_ data: Data, status: Int32) {
-    let text = String(decoding: data, as: UTF8.self)
+    guard let text = String(bytes: data, encoding: .utf8) else {
+      finish(.failure(HostFailure.adb))
+      return
+    }
     finish(status == 0 ? .success(text) : .failure(HostFailure.adb))
   }
 }

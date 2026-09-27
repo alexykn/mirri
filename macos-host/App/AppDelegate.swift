@@ -90,7 +90,8 @@ import UniformTypeIdentifiers
   private func install() {
     guard let selected else { return }
     let panel = NSOpenPanel()
-    panel.allowedContentTypes = [UTType(filenameExtension: "apk")!]
+    guard let apkType = UTType(filenameExtension: "apk") else { return }
+    panel.allowedContentTypes = [apkType]
     panel.canChooseDirectories = false
     guard panel.runModal() == .OK, let apk = panel.url else { return }
     Task {

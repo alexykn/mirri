@@ -1,0 +1,29 @@
+included:
+  - macos-host/Core
+  - macos-host/App
+  - macos-host/Tests
+excluded:
+  - macos-host/.build
+  - macos-host/build
+  - macos-host/DerivedData
+  - macos-host/MirriHost.xcodeproj
+disabled_rules:
+  - file_length
+  - type_body_length
+  - line_length
+  - function_body_length
+  - identifier_name
+  # swift-format owns these conflicting layout decisions.
+  - closure_parameter_position
+  - opening_brace
+  - trailing_comma
+cyclomatic_complexity:
+  warning: 12
+  error: 12
+  ignores_case_statements: true
+opt_in_rules:
+  - force_unwrapping
+  - empty_count
+  - first_where
+  - fatal_error_message
+  - unowned_variable_capture

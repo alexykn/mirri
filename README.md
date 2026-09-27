@@ -157,6 +157,11 @@ xcodebuild -project macos-host/MirriHost.xcodeproj -scheme MirriHost \
   CODE_SIGNING_ALLOWED=NO test
 (cd android-client && ./gradlew testDebugUnitTest assembleDebug)
 
+# Quality gate (all stages log even if an earlier stage reports source findings):
+brew install swiftlint # require SwiftLint 0.65.1; script rejects version drift
+./tools/check_quality.sh
+# Detailed cyclomatic offenders: logs/quality/python-complexity-detail.log
+
 swift format lint -r --strict macos-host/Core macos-host/Tests macos-host/App
 (cd android-client && ./gradlew ktlintCheck)
 # Optional explicit formatting (run check separately after formatting):
@@ -168,6 +173,44 @@ uv tool run --offline --from ruff==0.15.14 ruff check protocol/generate_fixtures
 uv tool run --offline --from ty==0.0.39 ty check protocol/generate_fixtures.py tools
 uv tool run --offline --from radon==6.0.1 radon cc -s -a protocol/generate_fixtures.py tools
 ```
+
+`tools/check_quality.sh` is the aggregate source-quality AND compiler/test gate;
+run with the JDK 17 `JAVA_HOME` and Android SDK `ANDROID_HOME` from above.
+It writes independent stage logs under ignored `logs/quality/`, returning nonzero
+if any gated stage fails. `uv sync --locked` installs pinned development tools
+from `uv.lock` (Python 3.11+): Ruff 0.15.14 formatting and E/F/I/B/UP/SIM/RUF
+checks, ty 0.0.39 types, and Xenon 0.9.3 using Radon 6.0.1 to **fail**
+functions/methods above Radon grade B (complexity >10); the separate Radon
+stage lists the exact rank/score for C+ blocks. All Python production and test
+modules under `tools/`, plus the protocol fixture generator, are included.
+The gate also creates one unique temporary `MIRRI_TIMING_EMITTER_DIR`, runs the
+existing Swift package and Android unit suites to write production host/client
+timing logs into it, then runs Python `unittest` discovery against those logs.
+It fails for missing/empty emitter output, undiscovered integration tests, or
+skipped/failed Python tests, and removes the temporary directory on exit.
+The existing unsigned Xcode test stage runs without emitter output so it cannot
+overwrite the Swift package fixtures. Gradle's unit test task is forced to
+rerun inside its existing aggregate invocation because Gradle does not track
+the temporary environment variable as a test input; this is not a second
+Android test run. Check `logs/quality/python-tests.log` for integration results.
+SwiftLint 0.65.1 runs strict against `Core`, `App`, and `Tests` with a
+cyclomatic limit of 12 (excluding simple switch cases); `swift format` owns
+layout, and noisy file/type/line/body-length metrics are not enforced. The
+SwiftLint version is checked before any stage so a newer Homebrew formula
+cannot silently alter the rules; install the 0.65.1 tagged release if Homebrew
+has moved forward. Android keeps ktlint 13.1.0 and pins detekt 2.0.0-alpha.0
+(Kotlin 2.2-era parser) for complexity 12 and correctness checks in production
+and tests; Android `lintDebug` treats warnings as errors. No baselines or
+generated-output exemptions masking handwritten source are used.
+Android lint ignores version-refresh advisories (`AndroidGradlePluginVersion`,
+`GradleDependency`, `NewerVersionAvailable`) because this project deliberately
+pins the verified toolchain/dependencies. It also excludes `ExpiredTargetSdkVersion`
+for the sideloaded client's intentionally retained target SDK 31, and scopes
+`DiscouragedApi` to the activity's required landscape orientation. Runtime
+exact-mode validation still rejects incompatible surfaces; Android 16 may ignore
+the orientation request. Other API, accessibility, and runtime diagnostics still
+fail the gate. The Gradle invocation uses `--continue` so
+lint/detekt failures do not prevent compiler, formatting, and unit test checks.
 
 The APK produced by `assembleDebug` is a runtime debug build (`versionCode=2`),
 not an accepted release. The host explicitly refuses the inert milestone-0

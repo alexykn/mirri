@@ -1,7 +1,7 @@
 """Offline, deterministic independent fixture author; never used by either application."""
 
-from pathlib import Path
 import struct
+from pathlib import Path
 
 NAMES = [
     "client-hello",
@@ -69,6 +69,16 @@ def value(kind):
         if kind == "mode":
             return struct.pack(">IIII", 1600, 2456, 60000, 7)
         return b"".join(value(t) for t in COMPOSITES[kind].split())
+    collection = list_value(kind)
+    if collection is not None:
+        return collection
+    special = special_value(kind)
+    if special is not None:
+        return special
+    return scalar_value(kind)
+
+
+def list_value(kind):
     for prefix in ("list16", "list2", "list3", "list64"):
         if kind.startswith(prefix):
             subtype = kind[len(prefix) :]
@@ -82,6 +92,10 @@ def value(kind):
                     + b"\x68\xce\x00"
                 )
             return bytes([count]) + value(subtype) * count
+    return None
+
+
+def special_value(kind):
     if kind == "bytes16":
         return bytes(range(16))
     if kind == "bytes32":
@@ -97,6 +111,10 @@ def value(kind):
         return struct.pack(">f", 0.5)
     if kind == "scale":
         return struct.pack(">f", 1.25)
+    return None
+
+
+def scalar_value(kind):
     vals = {
         "dimension": 2456,
         "refresh": 60000,
@@ -141,7 +159,7 @@ def value(kind):
 
 def fixture_value(index, position, part):
     if index == 1 and part == "str64":
-        name = "Écran 💠".encode("utf-8")
+        name = "Écran 💠".encode()
         return struct.pack(">H", len(name)) + name
     if index == 1 and part == "size":
         return struct.pack(">II", 1600, 2456)
@@ -162,7 +180,7 @@ def main(destination=None):
             + payload
         )
 
-    for index, (name, schema) in enumerate(zip(NAMES, SCHEMAS), 1):
+    for index, (name, schema) in enumerate(zip(NAMES, SCHEMAS, strict=True), 1):
         if index not in (1, 4):
             schema = "bytes16 epoch " + schema
         payload = b"".join(

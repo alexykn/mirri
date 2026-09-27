@@ -101,15 +101,9 @@ class DisplaySurfaceController(
         surfaceHeight: Int,
     ): Display.Mode {
         val manager = activity.getSystemService(DisplayManager::class.java)
-        val display =
-            activity.window.decorView.display ?: activity.display
-                ?: manager.getDisplay(Display.DEFAULT_DISPLAY)
-                ?: throw WireException("internal display unavailable")
+        val display = owningDisplay(manager)
         if (display.displayId != Display.DEFAULT_DISPLAY) throw WireException("$phase non-internal display")
-        val mode =
-            display.supportedModes.firstOrNull {
-                it.physicalWidth == 1600 && it.physicalHeight == 2456 && abs(it.refreshRate - 60f) < 0.01f
-            } ?: throw WireException("exact 60 Hz mode unavailable")
+        val mode = display.supportedModes.firstOrNull(::isExactMode) ?: throw WireException("exact 60 Hz mode unavailable")
         val requested = mode.details()
         val params = activity.window.attributes
         params.preferredDisplayModeId = mode.modeId
@@ -158,6 +152,14 @@ class DisplaySurfaceController(
         this.surface = surface
         return active
     }
+
+    private fun owningDisplay(manager: DisplayManager): Display =
+        activity.window.decorView.display ?: activity.display
+            ?: manager.getDisplay(Display.DEFAULT_DISPLAY)
+            ?: throw WireException("internal display unavailable")
+
+    private fun isExactMode(mode: Display.Mode): Boolean =
+        mode.physicalWidth == 1600 && mode.physicalHeight == 2456 && abs(mode.refreshRate - 60f) < 0.01f
 
     private fun Display.Mode.details() = ModeDetails(modeId, physicalWidth, physicalHeight, (refreshRate * 1000).roundToInt())
 

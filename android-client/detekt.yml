@@ -1,0 +1,24 @@
+complexity:
+  CyclomaticComplexMethod:
+    active: true
+    allowedComplexity: 12
+    ignoreSingleWhenExpression: true
+    ignoreSimpleWhenEntries: true
+  LongMethod:
+    active: false
+  LargeClass:
+    active: false
+  TooManyFunctions:
+    active: false
+  ComplexCondition:
+    active: true
+    allowedConditions: 3
+style:
+  MagicNumber:
+    active: false
+  MaxLineLength:
+    active: false
+  ReturnCount:
+    active: false
+  ThrowsCount:
+    active: false

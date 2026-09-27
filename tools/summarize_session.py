@@ -5,9 +5,9 @@ Never upload a host log or echo its unrecognized content.
 """
 
 import argparse
-from pathlib import Path
 import re
 import statistics
+from pathlib import Path
 
 PATTERN = re.compile(
     r"\bmetrics capture ([\d.]+) fps .*?encode ([\d.]+) fps .*?"

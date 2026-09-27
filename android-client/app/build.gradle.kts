@@ -1,7 +1,10 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jlleitschuh.gradle.ktlint")
+    id("dev.detekt")
 }
 android {
     namespace = "dev.mirri.client"
@@ -18,8 +21,24 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
     testOptions { unitTests.isReturnDefaultValues = true }
+    lint {
+        warningsAsErrors = true
+        // Version-refresh advisories conflict with intentionally pinned SDK/Gradle/dependencies.
+        // USB-only sideloaded client stays on target 31 to retain established tablet immersive/landscape behavior.
+        // The Play Store target-age advisory does not apply; all other Android lint issues remain fatal.
+        disable += setOf("AndroidGradlePluginVersion", "GradleDependency", "NewerVersionAvailable", "ExpiredTargetSdkVersion")
+    }
+}
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+        allWarningsAsErrors.set(true)
+    }
+}
+detekt {
+    config.setFrom(files("$rootDir/detekt.yml"))
+    buildUponDefaultConfig = true
 }
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")

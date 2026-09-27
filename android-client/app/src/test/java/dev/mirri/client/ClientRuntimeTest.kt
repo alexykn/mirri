@@ -193,6 +193,14 @@ class ClientRuntimeTest {
         assertEquals(listOf(1, 3, 4, 5, 6), phases(out))
     }
 
+    @Test fun accessibilityClickEmitsOneCenteredTap() {
+        val out = mutableListOf<InputEvent>()
+        TouchInterpreter(out::add).accessibilityClick()
+        assertEquals(listOf(1, 3, 4, 6), phases(out))
+        val samples = out.filterIsInstance<InputEvent.Pointers>().flatMap { it.samples }
+        assertTrue(samples.all { it.point.x == 0.5f && it.point.y == 0.5f })
+    }
+
     @Test fun secondFingerReleasesDragAndNoPhantomTap() {
         val out = mutableListOf<InputEvent>()
         val interpreter = TouchInterpreter(out::add)

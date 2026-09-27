@@ -9,9 +9,13 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import android.view.ViewConfiguration
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -30,11 +34,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        window.decorView.systemUiVisibility =
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        // Preserve the full-window SurfaceView while swipe-revealed system bars remain transient.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
         status =
             TextView(this).apply {
                 setTextColor(Color.WHITE)
@@ -46,7 +51,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 controller.status.collect { snapshot ->
-                    status.text = "Mirri: ${snapshot.state}\n${snapshot.note}"
+                    status.text = getString(R.string.session_status, snapshot.state, snapshot.note)
                     status.visibility =
                         if (snapshot.state == ClientSessionState.STREAMING) View.GONE else View.VISIBLE
                 }
@@ -54,7 +59,45 @@ class MainActivity : ComponentActivity() {
         }
         input = TouchInterpreter(controller::onInput)
         val surface =
-            SurfaceView(this).apply {
+            object : SurfaceView(this) {
+                private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+                private var tapCandidate = false
+                private var downX = 0f
+                private var downY = 0f
+                private var touchClick = false
+
+                override fun onTouchEvent(event: MotionEvent): Boolean {
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            tapCandidate = true
+                            downX = event.x
+                            downY = event.y
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val moved = kotlin.math.hypot(event.x - downX, event.y - downY) > touchSlop
+                            if (event.pointerCount != 1 || moved) tapCandidate = false
+                        }
+                        MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> tapCandidate = false
+                    }
+                    val handled = input.onMotion(event, width, height)
+                    if (event.actionMasked == MotionEvent.ACTION_UP && tapCandidate) {
+                        tapCandidate = false
+                        touchClick = true
+                        try {
+                            performClick()
+                        } finally {
+                            touchClick = false
+                        }
+                    }
+                    return handled
+                }
+
+                override fun performClick(): Boolean {
+                    super.performClick()
+                    if (!touchClick) input.accessibilityClick()
+                    return true
+                }
+            }.apply {
                 holder.addCallback(
                     object : SurfaceHolder.Callback {
                         override fun surfaceCreated(holder: SurfaceHolder) = Unit
@@ -76,7 +119,6 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                 )
-                setOnTouchListener { v, event -> input.onMotion(event, v.width, v.height) }
             }
         val view =
             FrameLayout(this).apply {
@@ -88,18 +130,13 @@ class MainActivity : ComponentActivity() {
         val epoch = intent.getIntExtra("mirri_epoch", 0)
         val control = intent.getIntExtra("mirri_control_port", 0)
         val video = intent.getIntExtra("mirri_video_port", 0)
-        if (token == null ||
-            !token.matches(Regex("[0-9a-f]{64}")) ||
-            epoch <= 0 ||
-            control != 5561 ||
-            video != 5560 ||
-            intent.getIntExtra("mirri_protocol_major", 0) != 1
-        ) {
+        if (!validLaunch(token, epoch, control, video)) {
             Log.w("MirriLifecycle", "launch rejected (invalid extras)")
-            status.text = "Mirri: launch from the Mac host over USB"
+            status.setText(R.string.launch_from_host)
         } else {
             Log.i("MirriLifecycle", "launch accepted surfacePending=true")
-            val bytes = ByteArray(32) { token.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
+            val acceptedToken = requireNotNull(token)
+            val bytes = ByteArray(32) { acceptedToken.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
             controller.start(ClientLaunch(bytes, epoch.toUInt(), control, video))
         }
     }
@@ -111,7 +148,26 @@ class MainActivity : ComponentActivity() {
         recreate()
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean = input.auxiliary(event) || super.dispatchKeyEvent(event)
+    private fun validLaunch(
+        token: String?,
+        epoch: Int,
+        control: Int,
+        video: Int,
+    ): Boolean {
+        val validIdentity = token != null && token.matches(Regex("[0-9a-f]{64}")) && epoch > 0
+        val validTransport = control == 5561 && video == 5560
+        return validIdentity && validTransport && intent.getIntExtra("mirri_protocol_major", 0) == 1
+    }
+
+    override fun onKeyDown(
+        keyCode: Int,
+        event: KeyEvent,
+    ): Boolean = input.auxiliary(event) || super.onKeyDown(keyCode, event)
+
+    override fun onKeyUp(
+        keyCode: Int,
+        event: KeyEvent,
+    ): Boolean = input.auxiliary(event) || super.onKeyUp(keyCode, event)
 
     override fun onTouchEvent(event: MotionEvent): Boolean = input.onMotion(event, window.decorView.width, window.decorView.height)
 

@@ -185,21 +185,8 @@ internal class ReorderedFrameGaps(
         force: Boolean,
     ) {
         while (pending.isNotEmpty()) {
-            if (!pending.containsKey(expected)) {
-                val oldest = pending.firstEntry() ?: break
-                if (!force &&
-                    pending.size < 64 &&
-                    (observedNs < oldest.value.observedNs || observedNs - oldest.value.observedNs < 1_000_000_000)
-                ) {
-                    break
-                }
-                missing += (oldest.key - expected).coerceAtLeast(0)
-                if (previousNs != null) ambiguous++
-                histogram.finishGapRun()
-                previousNs = null
-                expected = oldest.key
-            }
-            val next = pending.remove(expected) ?: break
+            if (!pending.containsKey(expected) && !advanceMissing(observedNs, force)) return
+            val next = pending.remove(expected) ?: return
             previousNs?.let {
                 val gap = next.timestampNs - it
                 if (!histogram.add(gap)) {
@@ -211,5 +198,20 @@ internal class ReorderedFrameGaps(
             previousNs = next.timestampNs
             expected++
         }
+    }
+
+    private fun advanceMissing(
+        observedNs: Long,
+        force: Boolean,
+    ): Boolean {
+        val oldest = pending.firstEntry() ?: return false
+        val fresh = observedNs < oldest.value.observedNs || observedNs - oldest.value.observedNs < 1_000_000_000
+        if (!force && pending.size < 64 && fresh) return false
+        missing += (oldest.key - expected).coerceAtLeast(0)
+        if (previousNs != null) ambiguous++
+        histogram.finishGapRun()
+        previousNs = null
+        expected = oldest.key
+        return true
     }
 }

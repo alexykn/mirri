@@ -46,30 +46,31 @@ object CodecCapabilityProbe {
             ),
         )
 
-    fun choices(): List<DecoderChoice> {
-        val result = mutableListOf<DecoderChoice>()
-        for (info in MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos) {
-            if (info.isEncoder || !info.isHardwareAccelerated || info.isSoftwareOnly) continue
-            for (profile in required) {
-                if (info.supportedTypes.none { it.equals(profile.mime, ignoreCase = true) }) continue
-                val caps =
-                    try {
-                        info.getCapabilitiesForType(profile.mime)
-                    } catch (_: IllegalArgumentException) {
-                        continue // Vendor advertises a MIME it cannot query; do not advertise it.
-                    }
-                if (!caps.videoCapabilities.areSizeAndRateSupported(2456, 1600, 60.0)) continue
-                if (caps.profileLevels.none { it.profile == profile.androidProfile && it.level >= profile.androidLevel }) continue
-                result +=
-                    DecoderChoice(
-                        info.name,
-                        profile.codec.wire,
-                        profile.codec.wire,
-                        profile.wireLevel,
-                        caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency),
-                    )
+    fun choices(): List<DecoderChoice> =
+        MediaCodecList(MediaCodecList.REGULAR_CODECS)
+            .codecInfos
+            .filter { !it.isEncoder && it.isHardwareAccelerated && !it.isSoftwareOnly }
+            .flatMap { info -> required.mapNotNull { profile -> choice(info, profile) } }
+
+    private fun choice(
+        info: MediaCodecInfo,
+        profile: Profile,
+    ): DecoderChoice? {
+        if (info.supportedTypes.none { it.equals(profile.mime, ignoreCase = true) }) return null
+        val caps =
+            try {
+                info.getCapabilitiesForType(profile.mime)
+            } catch (_: IllegalArgumentException) {
+                return null // Vendor advertises a MIME it cannot query; do not advertise it.
             }
-        }
-        return result
+        if (!caps.videoCapabilities.areSizeAndRateSupported(2456, 1600, 60.0)) return null
+        if (caps.profileLevels.none { it.profile == profile.androidProfile && it.level >= profile.androidLevel }) return null
+        return DecoderChoice(
+            info.name,
+            profile.codec.wire,
+            profile.codec.wire,
+            profile.wireLevel,
+            caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency),
+        )
     }
 }

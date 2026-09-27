@@ -113,6 +113,8 @@ class SessionController(
         val order: WireOrder,
     )
 
+    private enum class AttemptResult { CONNECTED, RETRY, TERMINAL }
+
     private fun state(
         value: ClientSessionState,
         note: String,
@@ -199,46 +201,68 @@ class SessionController(
 
     private suspend fun run() {
         var retryCount = 0
-        while (scope.isActive && surface != null && launch != null) {
-            val spec = launch ?: break
+        var terminal = false
+        while (scope.isActive && hasActiveSession() && !terminal) {
+            val spec = requireNotNull(launch)
             val owner = ClientAttempt()
             attempt = owner
-            try {
-                connectOnce(spec, owner)
-                retryCount = 0
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (e is WireException && e.message !in setOf("connection closed", "decoder failed")) {
-                    state(ClientSessionState.FAILED, e.message ?: "Protocol rejected")
-                    break
-                }
-                state(ClientSessionState.RECONNECTING, "USB/host connection interrupted; retrying")
-            } finally {
-                try {
-                    owner.timing.endWindow()
-                    withContext(NonCancellable + Dispatchers.IO) { owner.close() }
-                } finally {
-                    withContext(NonCancellable + Dispatchers.Main) {
-                        if (attempt === owner) {
-                            Log.i("MirriTiming", TimingLogMessage.final(owner.timing))
-                            attempt = null
-                            display.detach()
-                            if (surface == null && launch != null) {
-                                state(ClientSessionState.WAITING_FOR_SURFACE, "Surface lost; decoder released")
-                            }
-                        }
-                    }
-                }
+            when (runAttempt(spec, owner)) {
+                AttemptResult.CONNECTED -> retryCount = 0
+                AttemptResult.RETRY -> Unit
+                AttemptResult.TERMINAL -> terminal = true
             }
-            if (surface == null || launch == null) break
-            delay(ReconnectPolicy.delayMs(retryCount++))
-            if (retryCount > 16) {
-                state(ClientSessionState.FAILED, "Reconnect window expired")
-                break
+            if (!terminal && hasActiveSession()) {
+                delay(ReconnectPolicy.delayMs(retryCount++))
+                if (retryCount > 16) {
+                    state(ClientSessionState.FAILED, "Reconnect window expired")
+                    terminal = true
+                }
             }
         }
         if (scope.isActive && launch == null) state(ClientSessionState.IDLE, "Host stopped session")
+    }
+
+    private fun hasActiveSession(): Boolean = surface != null && launch != null
+
+    // Exceptions from the external codec/socket stack must be classified after owner cleanup.
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun runAttempt(
+        spec: ClientLaunch,
+        owner: ClientAttempt,
+    ): AttemptResult =
+        try {
+            connectOnce(spec, owner)
+            AttemptResult.CONNECTED
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (e is WireException && e.message !in setOf("connection closed", "decoder failed")) {
+                state(ClientSessionState.FAILED, e.message ?: "Protocol rejected")
+                AttemptResult.TERMINAL
+            } else {
+                state(ClientSessionState.RECONNECTING, "USB/host connection interrupted; retrying")
+                AttemptResult.RETRY
+            }
+        } finally {
+            cleanupAttempt(owner)
+        }
+
+    private suspend fun cleanupAttempt(owner: ClientAttempt) {
+        try {
+            owner.timing.endWindow()
+            withContext(NonCancellable + Dispatchers.IO) { owner.close() }
+        } finally {
+            withContext(NonCancellable + Dispatchers.Main) {
+                if (attempt === owner) {
+                    Log.i("MirriTiming", TimingLogMessage.final(owner.timing))
+                    attempt = null
+                    display.detach()
+                    if (surface == null && launch != null) {
+                        state(ClientSessionState.WAITING_FOR_SURFACE, "Surface lost; decoder released")
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun connectOnce(
@@ -254,6 +278,8 @@ class SessionController(
         streamUntilClosed(owner, prepared, decoder, active)
     }
 
+    // Display/framework readback failures require an explicit wire rejection, not a half-open attempt.
+    @Suppress("TooGenericExceptionCaught")
     private suspend fun negotiateControl(
         spec: ClientLaunch,
         owner: ClientAttempt,
@@ -306,11 +332,13 @@ class SessionController(
                 withContext(Dispatchers.Main) {
                     display.selectAndVerify(currentSurface, "post-config", surfaceWidth, surfaceHeight)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (
                 e: Exception,
             ) {
                 sendAndWait(channel, id, epoch, ClientCommand.Rejection(1, "Exact mode readback failed"))
-                throw (e as? WireException ?: WireException("post-config exact mode readback failed"))
+                throw (e as? WireException ?: WireException("post-config exact mode readback failed", e))
             }
         val selected =
             PhysicalMode(
@@ -322,6 +350,8 @@ class SessionController(
         return PreparedSession(currentSurface, channel, config, choice, selected, first)
     }
 
+    // Codec implementations throw multiple checked and unchecked exceptions during configure.
+    @Suppress("TooGenericExceptionCaught")
     private suspend fun configureDecoder(
         owner: ClientAttempt,
         prepared: PreparedSession,
@@ -350,8 +380,11 @@ class SessionController(
                                 withTimeoutOrNull(500) {
                                     sendAndWait(channel, id, epoch, ClientCommand.Failure(7))
                                 }
-                            } catch (_: Exception) {
-                                // The old connection may already be gone. Cleanup must still wake reads.
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                // The old connection may already be gone. Cleanup still wakes reads.
+                                Log.i("MirriLifecycle", "failure notice unavailable type=${e.javaClass.simpleName}")
                             } finally {
                                 owner.interrupt()
                             }
@@ -368,7 +401,7 @@ class SessionController(
             e: Exception,
         ) {
             sendAndWait(channel, id, epoch, ClientCommand.Rejection(2, "Hardware codec configure failed"))
-            throw WireException("hardware codec configure failed")
+            throw WireException("hardware codec configure failed", e)
         }
         owner.throwIfFailed()
         return d
@@ -404,6 +437,8 @@ class SessionController(
         return ActiveStream(v, order)
     }
 
+    // Independent video/control children must report arbitrary external socket/codec failures to their owner.
+    @Suppress("TooGenericExceptionCaught")
     private suspend fun streamUntilClosed(
         owner: ClientAttempt,
         prepared: PreparedSession,
@@ -432,6 +467,8 @@ class SessionController(
                                 throw WireException("control queue congested")
                             }
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (
                         e: Exception,
                     ) {
@@ -439,114 +476,14 @@ class SessionController(
                         channel.close()
                     }
                 }
-            val metricJob =
-                launch(Dispatchers.IO) {
-                    var timingReportSamples = 0
-                    var lockMaxNs = 0L
-                    var formatMaxNs = 0L
-                    var logMaxNs = 0L
-                    while (isActive) {
-                        delay(1000)
-                        val fps =
-                            owner.received
-                                .getAndSet(0)
-                                .toFloat()
-                                .coerceIn(0f, 240f)
-                        val bits = (owner.bytes.getAndSet(0) * 8).coerceIn(0, UInt.MAX_VALUE.toLong())
-                        val outputs =
-                            owner.decoded
-                                .getAndSet(0)
-                                .toFloat()
-                                .coerceIn(0f, 240f)
-                        val inputs =
-                            owner.decoderInputs
-                                .getAndSet(0)
-                                .toFloat()
-                                .coerceIn(0f, 240f)
-                        val frameAge = d.drainFrameAges()
-                        // Report-only costs; no per-frame work or extra diagnostic line each second.
-                        val lockStart = System.nanoTime()
-                        val timingSummary = owner.timing.drainLiveSummary()
-                        val lockNs = (System.nanoTime() - lockStart).coerceAtLeast(0)
-                        if (timingSummary != null) {
-                            val formatStart = System.nanoTime()
-                            val timingLine = timingSummary.line()
-                            val formatNs = (System.nanoTime() - formatStart).coerceAtLeast(0)
-                            val logStart = System.nanoTime()
-                            Log.i("MirriTiming", timingLine)
-                            val logNs = (System.nanoTime() - logStart).coerceAtLeast(0)
-                            timingReportSamples++
-                            lockMaxNs = maxOf(lockMaxNs, lockNs)
-                            formatMaxNs = maxOf(formatMaxNs, formatNs)
-                            logMaxNs = maxOf(logMaxNs, logNs)
-                            if (timingReportSamples == 10) {
-                                Log.i(
-                                    "MirriTimingReport",
-                                    "epoch=$epoch samples=10 lockMaxUs=${lockMaxNs / 1000} " +
-                                        "formatMaxUs=${formatMaxNs / 1000} logMaxUs=${logMaxNs / 1000}",
-                                )
-                                timingReportSamples = 0
-                                lockMaxNs = 0
-                                formatMaxNs = 0
-                                logMaxNs = 0
-                            }
-                        }
-                        if (frameAge.samples > 0 || frameAge.evicted > 0) {
-                            Log.i(
-                                "MirriLatency",
-                                "receive-to-decoder-release samples=${frameAge.samples} medianMs=${frameAge.medianMs} p95Ms=${frameAge.p95Ms} evicted=${frameAge.evicted}",
-                            )
-                        }
-                        // Metrics may be omitted under control congestion; input and
-                        // lifecycle messages still fail rather than silently drop.
-                        send(
-                            channel,
-                            id,
-                            epoch,
-                            ClientCommand.Metrics(
-                                fps,
-                                bits,
-                                inputs,
-                                outputs,
-                                selected,
-                                3 - encodedBuffers.available,
-                                dropped.get(),
-                            ),
-                        )
-                    }
-                }
+            val metricJob = launchMetrics(owner, d, channel, id, epoch, selected)
             try {
                 while (true) {
                     val message = blockingSocket(channel::close) { channel.read(order) }
-                    when (val event = SessionMessages.fromHost(message)) {
-                        HostEvent.Stop -> {
-                            owner.timing.endWindow()
-                            sendAndWait(channel, id, epoch, ClientCommand.Acknowledged)
-                            launch = null
-                            state(ClientSessionState.STOPPING, "Host stopped; releasing owned resources")
-                            return@coroutineScope
-                        }
-                        is HostEvent.Ping -> {
-                            val receivedNs = System.nanoTime()
-                            if (!send(
-                                    channel,
-                                    id,
-                                    epoch,
-                                    ClientCommand.Pong(
-                                        event.sequence,
-                                        event.sent,
-                                        receivedNs,
-                                        System.nanoTime(),
-                                    ),
-                                )
-                            ) {
-                                throw WireException("control queue congested")
-                            }
-                        }
-                        HostEvent.Error -> throw WireException("host protocol error")
-                        else -> throw WireException("unexpected session message")
-                    }
+                    if (handleHostEvent(SessionMessages.fromHost(message), channel, id, epoch, owner)) return@coroutineScope
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 throw owner.failure.tryReceive().getOrNull() ?: e
             } finally {
@@ -558,5 +495,108 @@ class SessionController(
                 videoJob.join()
             }
         }
+    }
+
+    private fun CoroutineScope.launchMetrics(
+        owner: ClientAttempt,
+        d: DecoderController,
+        channel: ControlChannel,
+        id: ByteArray,
+        epoch: UInt,
+        selected: PhysicalMode,
+    ): Job =
+        launch(Dispatchers.IO) {
+            var timingReportSamples = 0
+            var lockMaxNs = 0L
+            var formatMaxNs = 0L
+            var logMaxNs = 0L
+            while (isActive) {
+                delay(1000)
+                val fps =
+                    owner.received
+                        .getAndSet(0)
+                        .toFloat()
+                        .coerceIn(0f, 240f)
+                val bits = (owner.bytes.getAndSet(0) * 8).coerceIn(0, UInt.MAX_VALUE.toLong())
+                val outputs =
+                    owner.decoded
+                        .getAndSet(0)
+                        .toFloat()
+                        .coerceIn(0f, 240f)
+                val inputs =
+                    owner.decoderInputs
+                        .getAndSet(0)
+                        .toFloat()
+                        .coerceIn(0f, 240f)
+                val frameAge = d.drainFrameAges()
+                // Report-only costs; no per-frame work or extra diagnostic line each second.
+                val lockStart = System.nanoTime()
+                val timingSummary = owner.timing.drainLiveSummary()
+                val lockNs = (System.nanoTime() - lockStart).coerceAtLeast(0)
+                if (timingSummary != null) {
+                    val formatStart = System.nanoTime()
+                    val timingLine = timingSummary.line()
+                    val formatNs = (System.nanoTime() - formatStart).coerceAtLeast(0)
+                    val logStart = System.nanoTime()
+                    Log.i("MirriTiming", timingLine)
+                    val logNs = (System.nanoTime() - logStart).coerceAtLeast(0)
+                    timingReportSamples++
+                    lockMaxNs = maxOf(lockMaxNs, lockNs)
+                    formatMaxNs = maxOf(formatMaxNs, formatNs)
+                    logMaxNs = maxOf(logMaxNs, logNs)
+                    if (timingReportSamples == 10) {
+                        Log.i(
+                            "MirriTimingReport",
+                            "epoch=$epoch samples=10 lockMaxUs=${lockMaxNs / 1000} " +
+                                "formatMaxUs=${formatMaxNs / 1000} logMaxUs=${logMaxNs / 1000}",
+                        )
+                        timingReportSamples = 0
+                        lockMaxNs = 0
+                        formatMaxNs = 0
+                        logMaxNs = 0
+                    }
+                }
+                if (frameAge.samples > 0 || frameAge.evicted > 0) {
+                    Log.i(
+                        "MirriLatency",
+                        "receive-to-decoder-release samples=${frameAge.samples} medianMs=${frameAge.medianMs} p95Ms=${frameAge.p95Ms} evicted=${frameAge.evicted}",
+                    )
+                }
+                // Metrics may be omitted under control congestion; input and
+                // lifecycle messages still fail rather than silently drop.
+                send(
+                    channel,
+                    id,
+                    epoch,
+                    ClientCommand.Metrics(fps, bits, inputs, outputs, selected, 3 - encodedBuffers.available, dropped.get()),
+                )
+            }
+        }
+
+    private suspend fun handleHostEvent(
+        event: HostEvent,
+        channel: ControlChannel,
+        id: ByteArray,
+        epoch: UInt,
+        owner: ClientAttempt,
+    ): Boolean {
+        when (event) {
+            HostEvent.Stop -> {
+                owner.timing.endWindow()
+                sendAndWait(channel, id, epoch, ClientCommand.Acknowledged)
+                launch = null
+                state(ClientSessionState.STOPPING, "Host stopped; releasing owned resources")
+                return true
+            }
+            is HostEvent.Ping -> {
+                val receivedNs = System.nanoTime()
+                if (!send(channel, id, epoch, ClientCommand.Pong(event.sequence, event.sent, receivedNs, System.nanoTime()))) {
+                    throw WireException("control queue congested")
+                }
+            }
+            HostEvent.Error -> throw WireException("host protocol error")
+            else -> throw WireException("unexpected session message")
+        }
+        return false
     }
 }

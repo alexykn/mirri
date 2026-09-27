@@ -197,6 +197,49 @@ public enum WireCodec {
   private static func append(_ n: UInt64, width: Int, to data: inout Data) {
     for index in (0..<width).reversed() { data.append(UInt8(truncatingIfNeeded: n >> (index * 8))) }
   }
+  private static func encodeScalar(_ value: WireValue, _ type: String, _ out: inout Data) throws {
+    if type == "i32" {
+      guard case .signed(let n) = value else { throw WireFailure.malformed }
+      append(UInt64(UInt32(bitPattern: n)), width: 4, to: &out)
+      return
+    }
+    if ["unit", "tilt", "orientation", "delta", "scale", "fps"].contains(type) {
+      guard case .real(let n) = value else { throw WireFailure.malformed }
+      try finite(n, type)
+      append(UInt64(n.bitPattern), width: 4, to: &out)
+      return
+    }
+    guard case .integer(let n) = value else { throw WireFailure.malformed }
+    let w = width(type)
+    guard n <= (w == 8 ? UInt64.max : (UInt64(1) << (w * 8)) - 1) else {
+      throw WireFailure.malformed
+    }
+    if let bounds = range(type) { try checked(n, bounds) }
+    if type == "dimension" { try checked(n, 1...8192) }
+    if type == "refresh" { try checked(n, 1...240_000) }
+    if type == "touchCount" { try checked(n, 1...10) }
+    append(n, width: w, to: &out)
+  }
+  private static func encodeTextOrBytes(_ value: WireValue, _ type: String, _ out: inout Data)
+    throws
+  {
+    if let max = stringLimit(type) {
+      guard case .text(let s) = value else { throw WireFailure.malformed }
+      let d = try validText(s, max)
+      append(UInt64(d.count), width: 2, to: &out)
+      out.append(d)
+      return
+    }
+    guard case .bytes(let d) = value else { throw WireFailure.malformed }
+    let max = type == "param" ? 4096 : 16_777_216
+    guard
+      type == "bytes16"
+        ? d.count == 16 : type == "bytes32" ? d.count == 32 : (1...max).contains(d.count)
+    else { throw WireFailure.malformed }
+    if type == "param" { append(UInt64(d.count), width: 2, to: &out) }
+    if type == "au" { append(UInt64(d.count), width: 4, to: &out) }
+    out.append(d)
+  }
   private static func encode(_ value: WireValue, _ type: String, _ out: inout Data) throws {
     if let children = children(type) {
       guard case .object(let fields) = value, fields.count == children.count else {
@@ -211,46 +254,14 @@ public enum WireCodec {
       for item in items { try encode(item, child, &out) }
       return
     }
-    if type == "i32" {
-      guard case .signed(let n) = value else { throw WireFailure.malformed }
-      append(UInt64(UInt32(bitPattern: n)), width: 4, to: &out)
-      return
-    }
-    if ["unit", "tilt", "orientation", "delta", "scale", "fps"].contains(type) {
-      guard case .real(let n) = value else { throw WireFailure.malformed }
-      try finite(n, type)
-      append(UInt64(n.bitPattern), width: 4, to: &out)
-      return
-    }
-    if let max = stringLimit(type) {
-      guard case .text(let s) = value else { throw WireFailure.malformed }
-      let d = try validText(s, max)
-      append(UInt64(d.count), width: 2, to: &out)
-      out.append(d)
-      return
-    }
+    // Composite schemas, textual/blob payloads and fixed-width scalars have distinct bounds.
     if type == "bytes16" || type == "bytes32" || type == "param" || type == "au" {
-      guard case .bytes(let d) = value else { throw WireFailure.malformed }
-      let max = type == "param" ? 4096 : 16_777_216
-      guard
-        type == "bytes16"
-          ? d.count == 16 : type == "bytes32" ? d.count == 32 : (1...max).contains(d.count)
-      else { throw WireFailure.malformed }
-      if type == "param" { append(UInt64(d.count), width: 2, to: &out) }
-      if type == "au" { append(UInt64(d.count), width: 4, to: &out) }
-      out.append(d)
-      return
+      try encodeTextOrBytes(value, type, &out)
+    } else if stringLimit(type) != nil {
+      try encodeTextOrBytes(value, type, &out)
+    } else {
+      try encodeScalar(value, type, &out)
     }
-    guard case .integer(let n) = value else { throw WireFailure.malformed }
-    let w = width(type)
-    guard n <= (w == 8 ? UInt64.max : (UInt64(1) << (w * 8)) - 1) else {
-      throw WireFailure.malformed
-    }
-    if let bounds = range(type) { try checked(n, bounds) }
-    if type == "dimension" { try checked(n, 1...8192) }
-    if type == "refresh" { try checked(n, 1...240_000) }
-    if type == "touchCount" { try checked(n, 1...10) }
-    append(n, width: w, to: &out)
   }
   private struct Reader {
     let data: Data
@@ -266,6 +277,25 @@ public enum WireCodec {
       for byte in try take(width) { result = (result << 8) | UInt64(byte) }
       return result
     }
+    mutating func decodeTextOrBytes(_ type: String) throws -> WireValue {
+      if let max = WireCodec.stringLimit(type) {
+        let length = Int(try number(2))
+        guard length <= max else { throw WireFailure.malformed }
+        guard let s = String(data: try take(length), encoding: .utf8) else {
+          throw WireFailure.malformed
+        }
+        _ = try WireCodec.validText(s, max)
+        return .text(s)
+      }
+      if type == "bytes16" || type == "bytes32" {
+        return .bytes(try take(type == "bytes16" ? 16 : 32))
+      }
+      let length = Int(try number(type == "param" ? 2 : 4))
+      guard (1...(type == "param" ? 4096 : 16_777_216)).contains(length) else {
+        throw WireFailure.malformed
+      }
+      return .bytes(try take(length))
+    }
     mutating func decode(_ type: String) throws -> WireValue {
       if let fields = WireCodec.children(type) { return .object(try fields.map { try decode($0) }) }
       if let (max, child) = WireCodec.list(type) {
@@ -279,24 +309,9 @@ public enum WireCodec {
         try WireCodec.finite(n, type)
         return .real(n)
       }
-      if let max = WireCodec.stringLimit(type) {
-        let length = Int(try number(2))
-        guard length <= max else { throw WireFailure.malformed }
-        guard let s = String(data: try take(length), encoding: .utf8) else {
-          throw WireFailure.malformed
-        }
-        _ = try WireCodec.validText(s, max)
-        return .text(s)
-      }
-      if type == "bytes16" || type == "bytes32" {
-        return .bytes(try take(type == "bytes16" ? 16 : 32))
-      }
-      if type == "param" || type == "au" {
-        let length = Int(try number(type == "param" ? 2 : 4))
-        guard (1...(type == "param" ? 4096 : 16_777_216)).contains(length) else {
-          throw WireFailure.malformed
-        }
-        return .bytes(try take(length))
+      if WireCodec.stringLimit(type) != nil || ["bytes16", "bytes32", "param", "au"].contains(type)
+      {
+        return try decodeTextOrBytes(type)
       }
       let n = try number(WireCodec.width(type))
       if let bounds = WireCodec.range(type) { try WireCodec.checked(n, bounds) }

@@ -70,6 +70,8 @@ class DecoderController(
             }
         }
 
+    // Forward arbitrary codec-operation failures to the suspended caller on its original continuation.
+    @Suppress("TooGenericExceptionCaught")
     private suspend fun <T> onOwner(operation: () -> T): T =
         suspendCancellableCoroutine { continuation ->
             if (!handler.post {
@@ -86,6 +88,8 @@ class DecoderController(
             }
         }
 
+    // Failed vendor setup must release the codec regardless of exception subtype.
+    @Suppress("TooGenericExceptionCaught")
     suspend fun configure(
         choice: DecoderChoice,
         surface: Surface,
@@ -109,6 +113,8 @@ class DecoderController(
                         }
                     }
 
+                    // Codec callback failures report to the owner, never escape onto framework threads.
+                    @Suppress("TooGenericExceptionCaught")
                     override fun onOutputBufferAvailable(
                         codec: MediaCodec,
                         index: Int,
@@ -155,10 +161,12 @@ class DecoderController(
                         val height = format.getInteger(MediaFormat.KEY_HEIGHT)
 
                         fun crop(key: String): Int? = if (format.containsKey(key)) format.getInteger(key) else null
-                        val left = crop(MediaFormat.KEY_CROP_LEFT)
-                        val top = crop(MediaFormat.KEY_CROP_TOP)
-                        val right = crop(MediaFormat.KEY_CROP_RIGHT)
-                        val bottom = crop(MediaFormat.KEY_CROP_BOTTOM)
+                        // MediaFormat crop keys are strings on API 30-32 too; the named
+                        // constants were only added in API 33.
+                        val left = crop("crop-left")
+                        val top = crop("crop-top")
+                        val right = crop("crop-right")
+                        val bottom = crop("crop-bottom")
                         val wrongStandard = standard != null && standard != MediaFormat.COLOR_STANDARD_BT709
                         val wrongRange = range != null && range != MediaFormat.COLOR_RANGE_LIMITED
                         val wrongSize = !DecoderOutputReadback.isExactVisibleFrame(width, height, left, top, right, bottom)

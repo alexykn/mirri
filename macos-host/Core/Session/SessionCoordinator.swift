@@ -19,6 +19,15 @@ public actor SessionCoordinator {
     let incarnation: UInt64
     let epoch: UInt32
   }
+  private struct AuthenticatedControl {
+    let channel: WireConnection
+    let order: WireOrder
+    let greeting: ClientGreeting
+  }
+  private struct VideoBarrier {
+    let channel: WireConnection
+    let order: WireOrder
+  }
   public typealias StatusHandler = @MainActor @Sendable (HostSnapshot) async -> Void
   private let adb: ADBClient
   private let reverses: AdbReverseManager
@@ -29,7 +38,7 @@ public actor SessionCoordinator {
   private var timingReportLockMaxNs: UInt64 = 0
   private var timingReportFormatMaxNs: UInt64 = 0
   private var timingReportLogMaxNs: UInt64 = 0
-  private let logger = SessionLogger()
+  private let logger: SessionLogger
   private let status: StatusHandler
   private let permissions: @MainActor @Sendable () -> Bool
   private var snapshot = HostSnapshot()
@@ -63,12 +72,13 @@ public actor SessionCoordinator {
 
   public init(
     adb: ADBClient = ADBClient(), permissions: @escaping @MainActor @Sendable () -> Bool,
-    status: @escaping StatusHandler
+    status: @escaping StatusHandler, logger: SessionLogger = SessionLogger()
   ) {
     self.adb = adb
     reverses = AdbReverseManager(adb: adb)
     self.permissions = permissions
     self.status = status
+    self.logger = logger
   }
   public func configure(_ preferences: HostPreferences) { self.preferences = preferences }
   public func current() -> HostSnapshot { snapshot }
@@ -103,7 +113,8 @@ public actor SessionCoordinator {
   private static func random(_ length: Int) throws -> Data {
     var bytes = Data(count: length)
     let result = bytes.withUnsafeMutableBytes {
-      SecRandomCopyBytes(kSecRandomDefault, length, $0.baseAddress!)
+      guard let address = $0.baseAddress else { return errSecParam }
+      return SecRandomCopyBytes(kSecRandomDefault, length, address)
     }
     guard result == errSecSuccess else { throw HostFailure.transport }
     return bytes
@@ -174,20 +185,21 @@ public actor SessionCoordinator {
       if !Task.isCancelled { await self?.expireHandshake(attempt) }
     }
     defer { timeout.cancel() }
-    let (channel, order, greeting) = try await acceptAuthenticatedControl(
+    let authenticated = try await acceptAuthenticatedControl(
       controlListener, attempt: attempt)
-    let (config, active) = try await prepareExactDisplay(greeting, attempt: attempt)
-    let (videoChannel, readyOrder) = try await awaitClientBarrier(
-      channel: channel, listener: videoListener, order: order, config: config,
+    let (config, active) = try await prepareExactDisplay(authenticated.greeting, attempt: attempt)
+    let barrier = try await awaitClientBarrier(
+      channel: authenticated.channel, listener: videoListener, order: authenticated.order,
+      config: config,
       attempt: attempt)
     try await beginStreaming(
-      controlChannel: channel, videoChannel: videoChannel, order: readyOrder,
+      controlChannel: authenticated.channel, barrier: barrier,
       config: config, active: active, attempt: attempt)
   }
 
   private func acceptAuthenticatedControl(
     _ listener: LoopbackListener, attempt: AttemptIdentity
-  ) async throws -> (WireConnection, WireOrder, ClientGreeting) {
+  ) async throws -> AuthenticatedControl {
     let channel = try await listener.accept()
     try valid(attempt)
     control = channel
@@ -216,7 +228,7 @@ public actor SessionCoordinator {
     try order.accept(hello)
     try order.bindSession(sessionId)
     authenticatedControl = true
-    return (channel, order, greeting)
+    return AuthenticatedControl(channel: channel, order: order, greeting: greeting)
   }
 
   private func prepareExactDisplay(
@@ -248,7 +260,7 @@ public actor SessionCoordinator {
   private func awaitClientBarrier(
     channel: WireConnection, listener: LoopbackListener, order initialOrder: WireOrder,
     config: NegotiatedConfig, attempt: AttemptIdentity
-  ) async throws -> (WireConnection, WireOrder) {
+  ) async throws -> VideoBarrier {
     var order = initialOrder
     await state(.preparingClient, "Waiting for client's mode and decoder readback")
     try valid(attempt)
@@ -283,11 +295,11 @@ public actor SessionCoordinator {
     snapshot.clientMode = "1600x2456 @ 60 Hz (client readback)"
     snapshot.video =
       "Requested hardware \(config.codec == .avc ? "AVC" : "HEVC") \(config.bitrate / 1_000_000) Mbit/s"
-    return (videoChannel, order)
+    return VideoBarrier(channel: videoChannel, order: order)
   }
 
   private func beginStreaming(
-    controlChannel channel: WireConnection, videoChannel: WireConnection, order: WireOrder,
+    controlChannel channel: WireConnection, barrier: VideoBarrier,
     config: NegotiatedConfig, active: ActiveDisplay, attempt: AttemptIdentity
   ) async throws {
     let id = attempt.incarnation
@@ -303,7 +315,7 @@ public actor SessionCoordinator {
     timingReportFormatMaxNs = 0
     timingReportLogMaxNs = 0
     let pipeline = CapturePipeline(
-      display: active, socket: videoChannel,
+      display: active, socket: barrier.channel,
       id: sessionId, epoch: epoch, generation: generation, config: config,
       timing: stageTiming,
       onFailure: { [weak self] cause in
@@ -347,7 +359,7 @@ public actor SessionCoordinator {
       }
     }
     controlReader = Task { [weak self] in
-      await self?.readControl(channel, order: order, id: id, channelEpoch: channelEpoch)
+      await self?.readControl(channel, order: barrier.order, id: id, channelEpoch: channelEpoch)
     }
   }
   private func expireHandshake(_ attempt: AttemptIdentity) {
@@ -433,7 +445,8 @@ public actor SessionCoordinator {
             stopAckContinuation = nil
             return
           }
-          try await handleClientEvent(event, id: id, channelEpoch: channelEpoch)
+          try await handleClientEvent(
+            event, attempt: AttemptIdentity(incarnation: id, epoch: channelEpoch))
         }
       }
     } catch {
@@ -448,10 +461,11 @@ public actor SessionCoordinator {
     }
   }
   private func handleClientEvent(
-    _ event: ClientEvent, id: UInt64,
-    channelEpoch: UInt32
+    _ event: ClientEvent, attempt: AttemptIdentity
   ) async throws {
-    guard incarnation == id, epoch == channelEpoch, snapshot.state == .streaming else { return }
+    guard incarnation == attempt.incarnation, epoch == attempt.epoch,
+      snapshot.state == .streaming
+    else { return }
     switch event {
     case .input(let action):
       try input?.handle(action)

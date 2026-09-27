@@ -245,25 +245,33 @@ class VideoTimingOwner(
         keyframe: Boolean = false,
         auBytes: Int = 0,
     ) {
-        if (closed || windowEnded || !started || g != generation) {
+        val invalidWindow = closed || windowEnded || !started
+        if (invalidWindow || g != generation) {
             count("late")
             return
         }
-        if (wirePtsNs < 0 || packetNs <= 0 || sequence < 0 || auBytes < 0) {
+        val invalidClock = wirePtsNs < 0 || packetNs <= 0
+        val invalidRecord = sequence < 0 || auBytes < 0
+        if (invalidClock || invalidRecord) {
             count("invalidClock")
             return
         }
         val codecPtsUs = wirePtsNs / 1000 // MediaCodec.queueInputBuffer truncates nanoseconds to microseconds.
         count("received")
-        val size = auBytes.toLong()
-        if (keyframe) {
-            count("keyReceived")
-            counts["keyBytes"] = counts.getValue("keyBytes") + size
-            counts["keyMaxBytes"] = maxOf(counts.getValue("keyMaxBytes"), size)
-        } else {
-            counts["otherBytes"] = counts.getValue("otherBytes") + size
-            counts["otherMaxBytes"] = maxOf(counts.getValue("otherMaxBytes"), size)
+        recordByteCount(auBytes.toLong(), keyframe)
+        recordReceivedGaps(wirePtsNs, packetNs, keyframe)
+        if (!timingEnabled) {
+            count("ambiguousFrame")
+            return
         }
+        trackReceivedFrame(g, sequence, wirePtsNs, packetNs, codecPtsUs, keyframe)
+    }
+
+    private fun recordReceivedGaps(
+        wirePtsNs: Long,
+        packetNs: Long,
+        keyframe: Boolean,
+    ) {
         previousMediaPtsNs?.let { duration(Stage.MEDIA_PTS_GAP, it, wirePtsNs) }
         previousPacketNs?.let {
             if (duration(Stage.PACKET_GAP, it, packetNs) && keyframe && timingEnabled) {
@@ -272,32 +280,62 @@ class VideoTimingOwner(
         }
         previousMediaPtsNs = wirePtsNs
         previousPacketNs = packetNs
-        if (!timingEnabled) {
-            count("ambiguousFrame")
-            return
-        }
+    }
+
+    private fun trackReceivedFrame(
+        g: UInt,
+        sequence: Long,
+        wirePtsNs: Long,
+        packetNs: Long,
+        codecPtsUs: Long,
+        keyframe: Boolean,
+    ) {
         expireFrames(packetNs)
-        if (codecPtsUs in frames || codecPtsUs in pendingRenders || codecPtsUs in renderedPts) {
+        val queued = codecPtsUs in frames || codecPtsUs in pendingRenders
+        if (queued || codecPtsUs in renderedPts) {
             count("duplicate")
             return
         }
         if (wirePtsNs % 1000 != 0L) count("truncatedPts")
-        if (frames.size + pendingRenders.size >= capacity) {
-            if (pendingRenders.isNotEmpty()) {
-                val evicted = pendingRenders.entries.first()
-                pendingRenders.remove(evicted.key)
-                rememberExpired(evicted.key)
-                count("missingRender")
-            } else {
-                // Only an actual pre-release backlog may displace an active frame.
-                val evicted = frames.entries.first()
-                frames.remove(evicted.key)
-                rememberExpired(evicted.key)
-            }
-            count("overflow")
-        }
+        if (frames.size + pendingRenders.size >= capacity) evictOldestFrame()
         frames[codecPtsUs] = Frame(g, sequence, packetNs, keyframe)
         highWater = maxOf(highWater, frames.size + pendingRenders.size)
+    }
+
+    private fun recordByteCount(
+        size: Long,
+        keyframe: Boolean,
+    ) {
+        if (keyframe) {
+            count("keyReceived")
+            addBytes("keyBytes", "keyMaxBytes", size)
+        } else {
+            addBytes("otherBytes", "otherMaxBytes", size)
+        }
+    }
+
+    private fun addBytes(
+        bytes: String,
+        maxBytes: String,
+        size: Long,
+    ) {
+        counts[bytes] = counts.getValue(bytes) + size
+        counts[maxBytes] = maxOf(counts.getValue(maxBytes), size)
+    }
+
+    private fun evictOldestFrame() {
+        if (pendingRenders.isNotEmpty()) {
+            val evicted = pendingRenders.entries.first()
+            pendingRenders.remove(evicted.key)
+            rememberExpired(evicted.key)
+            count("missingRender")
+        } else {
+            // Only an actual pre-release backlog may displace an active frame.
+            val evicted = frames.entries.first()
+            frames.remove(evicted.key)
+            rememberExpired(evicted.key)
+        }
+        count("overflow")
     }
 
     private fun rememberExpired(ptsUs: Long) {
@@ -457,6 +495,19 @@ class VideoTimingOwner(
             )
             return
         }
+        recordRenderTiming(frame, renderedNs, callbackArrivalNs)
+        pendingRenders.remove(ptsUs)
+        renderedPts.add(ptsUs)
+        if (renderedPts.size > 64) renderedPts.remove(renderedPts.first())
+        totalRendered++
+        count("rendered")
+    }
+
+    private fun recordRenderTiming(
+        frame: PendingRender,
+        renderedNs: Long,
+        callbackArrivalNs: Long,
+    ) {
         val validRelease = duration(Stage.RELEASE_TO_RENDER, frame.releasedNs, renderedNs)
         val validPacket = duration(Stage.PACKET_TO_RENDER, frame.packetNs, renderedNs)
         val validCallback = duration(Stage.RENDER_CALLBACK_DELAY, renderedNs, callbackArrivalNs)
@@ -466,11 +517,6 @@ class VideoTimingOwner(
         } else {
             count("renderInvalid")
         }
-        pendingRenders.remove(ptsUs)
-        renderedPts.add(ptsUs)
-        if (renderedPts.size > 64) renderedPts.remove(renderedPts.first())
-        totalRendered++
-        count("rendered")
     }
 
     private fun countMissingRenders() {
