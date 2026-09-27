@@ -10,6 +10,7 @@ import dev.mirri.client.protocol.ControlChannel
 import dev.mirri.client.protocol.HostEvent
 import dev.mirri.client.protocol.InputEvent
 import dev.mirri.client.protocol.MessageType
+import dev.mirri.client.protocol.NetworkBootstrap
 import dev.mirri.client.protocol.PhysicalMode
 import dev.mirri.client.protocol.SessionConfiguration
 import dev.mirri.client.protocol.SessionMessages
@@ -19,6 +20,7 @@ import dev.mirri.client.protocol.WireException
 import dev.mirri.client.protocol.WireMessage
 import dev.mirri.client.protocol.WireOrder
 import dev.mirri.client.protocol.openVideo
+import dev.mirri.client.transport.PeerAuthenticationException
 import dev.mirri.client.transport.blockingBytes
 import dev.mirri.client.video.CodecCapabilityProbe
 import dev.mirri.client.video.DecoderChoice
@@ -83,6 +85,7 @@ class SessionController(
     private var surfaceHeight = 0
     private var launch: ClientLaunch? = null
     private var job: Job? = null
+    private var terminalLaunch = false
 
     @Volatile
     private var attempt: ClientAttempt? = null
@@ -118,6 +121,7 @@ class SessionController(
 
     fun start(value: ClientLaunch) {
         Log.i("MirriLifecycle", "start surfacePresent=${surface != null}")
+        terminalLaunch = false
         launch = value
         if (surface == null) state(ClientSessionState.WAITING_FOR_SURFACE, "Waiting for landscape SurfaceView") else restart()
     }
@@ -131,17 +135,18 @@ class SessionController(
         surface = value
         surfaceWidth = width
         surfaceHeight = height
-        if (launch != null) restart()
+        if (launch != null && !terminalLaunch) restart()
     }
 
     fun onSurfaceDestroyed() {
         surface = null
         job?.cancel()
         attempt?.interrupt()
-        state(ClientSessionState.WAITING_FOR_SURFACE, "Surface lost; releasing decoder")
+        if (!terminalLaunch) state(ClientSessionState.WAITING_FOR_SURFACE, "Surface lost; releasing decoder")
     }
 
     private fun restart() {
+        if (terminalLaunch) return
         val previous = job
         previous?.cancel()
         attempt?.interrupt()
@@ -165,6 +170,7 @@ class SessionController(
 
     fun stop() {
         launch = null
+        terminalLaunch = false
         job?.cancel()
         job = null
         attempt?.interrupt()
@@ -202,7 +208,10 @@ class SessionController(
             when (runAttempt(spec, owner)) {
                 AttemptResult.CONNECTED -> retryCount = 0
                 AttemptResult.RETRY -> Unit
-                AttemptResult.TERMINAL -> terminal = true
+                AttemptResult.TERMINAL -> {
+                    terminal = true
+                    terminalLaunch = true
+                }
             }
             if (!terminal && hasActiveSession()) {
                 delay(ReconnectPolicy.delayMs(retryCount++))
@@ -229,16 +238,23 @@ class SessionController(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            if ((e is WireException && e.message !in setOf("connection closed", "decoder failed")) || e is DecoderFailure) {
+            if (e is DecoderFailure || e is PeerAuthenticationException || fatalProtocol(e)) {
+                terminalLaunch = true
                 state(ClientSessionState.FAILED, e.message ?: "Protocol rejected")
                 AttemptResult.TERMINAL
             } else {
-                state(ClientSessionState.RECONNECTING, "USB/host connection interrupted; retrying")
+                state(
+                    ClientSessionState.RECONNECTING,
+                    "${if (spec.mode == BootstrapMode.USB) "USB" else "Network"}/host connection interrupted; retrying",
+                )
                 AttemptResult.RETRY
             }
         } finally {
             cleanupAttempt(owner)
         }
+
+    private fun fatalProtocol(error: Exception): Boolean =
+        error is WireException && error.message !in setOf("connection closed", "decoder failed")
 
     private suspend fun cleanupAttempt(owner: ClientAttempt) {
         try {
@@ -278,25 +294,33 @@ class SessionController(
         owner: ClientAttempt,
         currentSurface: Surface,
     ): PreparedSession {
-        // The host currently requires an already-active exact mode in ClientHello.
-        state(ClientSessionState.CONFIGURING_DISPLAY, "Selecting and reading back 60 Hz")
-        withContext(Dispatchers.Main) {
-            display.selectAndVerify(currentSurface, "pre-hello", surfaceWidth, surfaceHeight)
-        }
-        state(ClientSessionState.CONNECTING_CONTROL, "Connecting USB control")
+        // Preserve USB setup order; network verifies pinned TLS and MRNB first.
+        selectPreHelloSurface(spec.mode, beforeConnection = true, value = currentSurface)
+        state(
+            ClientSessionState.CONNECTING_CONTROL,
+            if (spec.mode == BootstrapMode.USB) "Connecting USB control" else "Connecting pinned TLS control",
+        )
         // The raw socket joins this attempt *before* blocking connect or a
         // cancellable IO -> Main handoff; finally closes it even if delivery fails.
         val bytes = spec.connector.connect(spec.endpoint.controlPort, owner.connections)
+        // TLS pin and validity are checked by the connector before this token-bearing preface.
+        val epoch =
+            if (spec.mode == BootstrapMode.NETWORK) {
+                blockingBytes(bytes::close) { NetworkBootstrap.exchange(bytes, spec.token) }
+            } else {
+                spec.epoch
+            }
+        bytes.finishSetup()
         val channel =
             ControlChannel(bytes, scope) {
                 owner.failure.trySend(it)
                 bytes.close()
             }
         owner.control = channel
-        // Only the host can advance epochs, via a new launch intent; retries before that reuse this epoch.
-        val epoch = spec.epoch
+        // USB advances via ADB relaunch; network learns every current epoch over pinned TLS.
         owner.epoch = epoch
         owner.timing.setEpoch(epoch)
+        selectPreHelloSurface(spec.mode, beforeConnection = false, value = currentSurface)
         state(ClientSessionState.NEGOTIATING, "Reporting exact display and decoder support")
         val hello = withContext(Dispatchers.Main) { DeviceCapabilitiesCollector.collect(activity, epoch, spec.token) }
         channel.sendAndWait(MessageType.CLIENT_HELLO.id, SessionMessages.clientHelloFields(hello))
@@ -341,6 +365,18 @@ class SessionController(
                 mode.modeId,
             )
         return PreparedSession(currentSurface, channel, config, choice, selected, first)
+    }
+
+    private suspend fun selectPreHelloSurface(
+        mode: BootstrapMode,
+        beforeConnection: Boolean,
+        value: Surface,
+    ) {
+        if ((mode == BootstrapMode.USB) != beforeConnection) return
+        state(ClientSessionState.CONFIGURING_DISPLAY, "Selecting and reading back 60 Hz")
+        withContext(Dispatchers.Main) {
+            display.selectAndVerify(value, "pre-hello", surfaceWidth, surfaceHeight)
+        }
     }
 
     // Codec implementations throw multiple checked and unchecked exceptions during configure.
@@ -426,7 +462,10 @@ class SessionController(
         owner.generation = started.generation - 1u
         owner.streaming = true
         owner.timing.activate()
-        state(ClientSessionState.STREAMING, "2456x1600 @ 60 Hz hardware ${choice.name}")
+        state(
+            ClientSessionState.STREAMING,
+            "${if (spec.mode == BootstrapMode.USB) "USB" else "Network TLS"}: 2456x1600 @ 60 Hz hardware ${choice.name}",
+        )
         return ActiveStream(v, order)
     }
 

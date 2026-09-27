@@ -13,8 +13,8 @@ android {
         applicationId = "dev.mirri.client"
         minSdk = 30
         targetSdk = 31
-        versionCode = 2
-        versionName = "0.1.0-runtime"
+        versionCode = 3
+        versionName = "0.2.0-network"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     compileOptions {
@@ -25,7 +25,7 @@ android {
     lint {
         warningsAsErrors = true
         // Version-refresh advisories conflict with intentionally pinned SDK/Gradle/dependencies.
-        // USB-only sideloaded client stays on target 31 to retain established tablet immersive/landscape behavior.
+        // Sideloaded USB/network client stays on target 31 to retain established tablet immersive/landscape behavior.
         // The Play Store target-age advisory does not apply; all other Android lint issues remain fatal.
         disable += setOf("AndroidGradlePluginVersion", "GradleDependency", "NewerVersionAvailable", "ExpiredTargetSdkVersion")
     }

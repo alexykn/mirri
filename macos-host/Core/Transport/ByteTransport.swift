@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Security
 
 /// Raw, ordered bytes. Framing and outbound wire sequences belong to the Mirri layer.
 public protocol ByteConnection: Sendable {
@@ -13,8 +14,8 @@ public protocol ByteListener: Sendable {
   func close()
 }
 
-/// Loopback-only listener; one pending connection and one active connection at a time.
-public final class LoopbackByteListener: ByteListener, @unchecked Sendable {
+/// A single bounded listener. Only canonical unicast IPv4 is accepted; LAN bindings require TLS.
+public final class BoundedByteListener: ByteListener, @unchecked Sendable {
   private let listener: NWListener
   private let queue = DispatchQueue(label: "dev.mirri.listener")
   private let lock = NSLock()
@@ -22,14 +23,29 @@ public final class LoopbackByteListener: ByteListener, @unchecked Sendable {
   private var waiting: NWConnection?
   private var active: NWConnection?
   private var closed = false
-  public init(port: UInt16, noDelay: Bool = false) throws {
+  public init(
+    port: UInt16, noDelay: Bool = false, address: String,
+    identity: sec_identity_t? = nil
+  ) throws {
     guard let endpointPort = NWEndpoint.Port(rawValue: port) else {
       throw HostFailure.transport
     }
+    let octets = address.split(separator: ".", omittingEmptySubsequences: false)
+      .compactMap { UInt8($0) }
+    guard octets.count == 4, octets.map(String.init).joined(separator: ".") == address,
+      address == "127.0.0.1" || (octets[0] > 0 && octets[0] < 224 && octets[0] != 127),
+      address == "127.0.0.1" || identity != nil
+    else { throw HostFailure.invalidState }
     let tcp = NWProtocolTCP.Options()
     tcp.noDelay = noDelay
-    let params = NWParameters(tls: nil, tcp: tcp)
-    params.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: endpointPort)
+    let tls: NWProtocolTLS.Options? = identity.map { identity in
+      let options = NWProtocolTLS.Options()
+      sec_protocol_options_set_min_tls_protocol_version(options.securityProtocolOptions, .TLSv12)
+      sec_protocol_options_set_local_identity(options.securityProtocolOptions, identity)
+      return options
+    }
+    let params = NWParameters(tls: tls, tcp: tcp)
+    params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(address), port: endpointPort)
     listener = try NWListener(using: params)
     listener.newConnectionHandler = { [weak self] connection in self?.offer(connection) }
     listener.stateUpdateHandler = { [weak self] state in

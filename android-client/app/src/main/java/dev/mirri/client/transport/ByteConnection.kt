@@ -16,6 +16,9 @@ interface ByteConnection : AutoCloseable {
 
     fun writeFully(buffer: ByteBuffer)
 
+    /** Clear connection-establishment read deadlines once the authenticated setup completes. */
+    fun finishSetup() = Unit
+
     override fun close()
 }
 

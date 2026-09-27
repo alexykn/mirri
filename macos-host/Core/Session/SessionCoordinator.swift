@@ -27,6 +27,7 @@ public actor SessionCoordinator {
   private struct VideoBarrier {
     let channel: WireConnection
     let order: WireOrder
+    let route: any HostConnectionRoute
   }
   public typealias StatusHandler = @MainActor @Sendable (HostSnapshot) async -> Void
   private var route: (any HostConnectionRoute)?
@@ -127,9 +128,9 @@ public actor SessionCoordinator {
       pingSequence = 0
       pendingPing = nil
       authenticatedControl = false
-      await state(.preparingTransport, "Binding 127.0.0.1 and creating owned ADB reverse mappings")
+      await state(.preparingTransport, newRoute.transportDescription)
       try valid(id)
-      await state(.waitingForClient, "Launching client and waiting for authenticated hello")
+      await state(.waitingForClient, newRoute.waitingDescription)
       try valid(id)
       try await newRoute.bootstrap(
         AttemptCredentials(token: token, sessionId: sessionId, epoch: epoch))
@@ -174,7 +175,17 @@ public actor SessionCoordinator {
     videoChannel: Bool
   ) async throws -> WireConnection {
     let bytes = try await (videoChannel ? route.acceptVideo() : route.acceptControl())
-    let channel = WireConnection(bytes, video: videoChannel)
+    var prepared: any ByteConnection = bytes
+    if !videoChannel && route.requiresEpochBootstrap {
+      do {
+        try valid(AttemptIdentity(incarnation: id, epoch: expectedEpoch))
+        prepared = try await NetworkBootstrap.accept(bytes, token: token, epoch: expectedEpoch)
+      } catch {
+        await bytes.close()
+        throw error
+      }
+    }
+    let channel = WireConnection(prepared, video: videoChannel)
     do { try valid(AttemptIdentity(incarnation: id, epoch: expectedEpoch)) } catch {
       await channel.close()
       throw error
@@ -279,7 +290,7 @@ public actor SessionCoordinator {
     snapshot.clientMode = "1600x2456 @ 60 Hz (client readback)"
     snapshot.video =
       "Requested hardware \(config.codec == .avc ? "AVC" : "HEVC") \(config.bitrate / 1_000_000) Mbit/s"
-    return VideoBarrier(channel: videoChannel, order: order)
+    return VideoBarrier(channel: videoChannel, order: order, route: route)
   }
 
   private func beginStreaming(
@@ -335,7 +346,7 @@ public actor SessionCoordinator {
       display: active, zoom: preferences.zoom,
       auxiliaryAction: preferences.auxiliaryAction)
     reconnectUntil = nil
-    await state(.streaming, "Streaming over USB")
+    await state(.streaming, barrier.route.streamingDescription)
     try valid(attempt)
     tick?.cancel()
     tick = Task { [weak self] in

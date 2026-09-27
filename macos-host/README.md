@@ -1,4 +1,4 @@
-# macOS host runtime (USB-only)
+# macOS host runtime (USB and opt-in Network with USB setup)
 
 `MirriHost.xcodeproj` builds an unsandboxed menu-bar application, a Swift core
 framework and the Objective-C virtual-display shim. Run `xcodegen generate`
@@ -7,7 +7,7 @@ after changing `project.yml`. Development checks:
 ```sh
 cd macos-host
 swift test
-swift format lint -r --strict Core Tests App
+swift format lint -r --strict Core Tests App Tools
 xcodebuild -project MirriHost.xcodeproj -scheme MirriHost \
   -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test
 ```
@@ -15,14 +15,34 @@ xcodebuild -project MirriHost.xcodeproj -scheme MirriHost \
 Start only after Screen Recording and Accessibility permissions have been
 granted to the **same stable app bundle identity** (a release build must be
 signed consistently). Select an authorized physical USB device.
-In **Settings (next session)**, choose native 2456×1600 logical points or
+For USB, choose **Start USB**; it binds only 127.0.0.1 and requires installed
+client `versionCode >= 2`. For **Network (USB setup)**, first put Mac and tablet
+on an already reachable IP network (ordinary shared Wi-Fi LAN or tablet hotspot),
+keep the authorized USB cable attached for the initial launch, install the
+debug client `versionCode >= 3` **only with explicit owner approval**, and select
+the device. In the menu choose **Start Network (USB setup) · <interface> <IPv4>**
+for the exact current Mac address that the tablet can reach. Mirri rechecks that
+interface/address before binding only it at TCP 5560/5561; a change fails rather
+than binding another address. Allow macOS Local Network permission and inbound
+traffic to those ports for the app in the firewall. The tablet must reach the
+selected Mac address; Mirri does not configure Wi-Fi, hotspot, router rules,
+Internet Sharing or ADB-over-TCP. After the first USB launch, reconnect epochs
+use pinned TLS and require no ADB/cable; Stop or a fresh session needs USB setup
+again. The certificate/key are ephemeral in memory and expire after 24 hours.
+No cleartext fallback, persistent pairing, automatic discovery, Wi-Fi Direct,
+Wi-Fi Aware, IPv6, or physical-network performance claim is provided. The
+USB-only diagnostics below do not establish network-mode hardware behavior.
+The source-level synthetic cross-platform test runs an ephemeral SwiftPM TLS
+server against the desktop-JVM Android connector; it does **not** open tablet
+connections or prove shared-LAN reachability. In **Settings (next session)**,
+choose native 2456×1600 logical points or
 1228×800 logical HiDPI (2× backing). Selection persists, applies only on the
 next Start, and fails closed unless macOS reports the requested logical mode,
 2456×1600 pixel backing, logical global bounds and 60 Hz. The owned HiDPI
 display physically read back 1228×800 logical / 2456×1600 pixel backing @60;
 native logical selection and four-corner pointer mapping still need owner
 acceptance.
-An installed runtime client with `versionCode >= 2` is required: the inert milestone-0
+An installed runtime client with `versionCode >= 2` is required for USB: the inert milestone-0
 client (`versionCode=1`) is deliberately refused. APK installation is an
 explicit menu action, never automatic. `adb` defaults to
 `/opt/homebrew/bin/adb`. The host accepts only entries with `usb:` in
@@ -37,13 +57,16 @@ reverse --list` before confirming. A running process retains its in-memory
 owned mapping record through a temporary USB loss and retries cleanup when the
 same USB device becomes available again. Serial values are never logged.
 
-Launch intent extras: `mirri_token` (32 random bytes as 64 lowercase hex
+USB launch intent extras: `mirri_token` (32 random bytes as 64 lowercase hex
 characters), `mirri_epoch` (integer), `mirri_control_port=5561`,
-`mirri_video_port=5560`, `mirri_protocol_major=1`. Android sends ClientHello,
+`mirri_video_port=5560`, `mirri_protocol_major=1`, `mirri_mode=usb`.
+Network adds `mirri_mode=network`, `mirri_host` (selected IPv4) and `mirri_pin`
+(exact SHA-256 of its per-session DER certificate); missing/mixed extras fail
+closed. Android sends ClientHello,
 receives SessionConfig, connects video and sends VideoChannelHello, then sends
 ClientReady only after its exact mode and hardware decoder are verified. The
 host sends StartStream, codec configuration and IDR after readiness.
-Every fresh host epoch, including a reconnect within grace, uses
+In USB mode every fresh host epoch, including a reconnect within grace, uses
 `adb shell am start -S -n dev.mirri.client/.MainActivity` after releasing the
 previous stream's sockets/capture. `-S` stops **only Mirri's process** and
 starts a new activity/controller for the new epoch; it does not uninstall,

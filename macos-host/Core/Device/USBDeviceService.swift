@@ -4,7 +4,7 @@ import Foundation
 public actor USBDeviceService {
   private let adb: ADBClient
   private let reverses: AdbReverseManager
-  private var activeRoute: USBConnectionRoute?
+  private var activeRoute: (any HostConnectionRoute)?
   private var maintenance = false
   public init(adb: ADBClient = ADBClient()) {
     self.adb = adb
@@ -42,7 +42,15 @@ public actor USBDeviceService {
     activeRoute = route
     return route
   }
-  func released(_ route: USBConnectionRoute) {
+  public func networkRoute(on device: ADBDevice, address: LocalIPv4Address) throws
+    -> NetworkConnectionRoute
+  {
+    guard activeRoute == nil, !maintenance else { throw HostFailure.invalidState }
+    let route = NetworkConnectionRoute(device: device, address: address, adb: adb, service: self)
+    activeRoute = route
+    return route
+  }
+  func released(_ route: any HostConnectionRoute) {
     if activeRoute === route { activeRoute = nil }
   }
 }
@@ -54,8 +62,8 @@ public actor USBConnectionRoute: HostConnectionRoute {
   private let adb: ADBClient
   private let reverses: AdbReverseManager
   private weak var service: USBDeviceService?
-  private var control: LoopbackByteListener?
-  private var video: LoopbackByteListener?
+  private var control: BoundedByteListener?
+  private var video: BoundedByteListener?
   private var closed = false
   private var closing: Task<Void, Never>?
   private var pendingADB: Task<Void, Never>?
@@ -87,9 +95,9 @@ public actor USBConnectionRoute: HostConnectionRoute {
   private func bindListeners() throws {
     try checkOpen()
     // Join both listeners before any asynchronous reverse-map or launch call.
-    let control = try LoopbackByteListener(port: 5561, noDelay: true)
+    let control = try BoundedByteListener(port: 5561, noDelay: true, address: "127.0.0.1")
     self.control = control
-    video = try LoopbackByteListener(port: 5560)
+    video = try BoundedByteListener(port: 5560, address: "127.0.0.1")
   }
   public func prepare() async throws -> String {
     try checkOpen()

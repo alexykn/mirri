@@ -59,13 +59,15 @@ check protocol-fixtures uv run --locked python tools/compare_protocol_fixtures.p
 check source-boundaries bash tools/test_source_boundaries.sh
 check python-complexity uv run --locked xenon --max-absolute B protocol/generate_fixtures.py tools
 check python-complexity-detail uv run --locked radon cc -s -n C protocol/generate_fixtures.py tools
-check swift-format swift format lint -r --strict macos-host/Core macos-host/Tests macos-host/App
+check swift-format swift format lint -r --strict macos-host/Core macos-host/Tests macos-host/App macos-host/Tools
 check swift-lint swiftlint lint --config .swiftlint.yml --strict --quiet
 check swift-tests env MIRRI_TIMING_EMITTER_DIR="$timing_dir" bash -c 'cd macos-host && swift test -Xswiftc -warnings-as-errors'
 # Xcode tests also execute package tests; do not emit the same host fixtures twice.
-check swift-xcode-tests env -u MIRRI_TIMING_EMITTER_DIR xcodebuild -project macos-host/MirriHost.xcodeproj -scheme MirriHost -destination platform=macOS -derivedDataPath /tmp/mirri-host-derived CODE_SIGNING_ALLOWED=NO SWIFT_TREAT_WARNINGS_AS_ERRORS=YES test
+# First-party Xcode targets enable warnings-as-errors in project.yml; do not
+# force this on package dependencies that intentionally compile with -suppress-warnings.
+check swift-xcode-tests env -u MIRRI_TIMING_EMITTER_DIR xcodebuild -project macos-host/MirriHost.xcodeproj -scheme MirriHost -destination platform=macOS -derivedDataPath /tmp/mirri-host-derived CODE_SIGNING_ALLOWED=NO test
 # Gradle does not track this ephemeral environment variable as a test task input.
 # Re-run the existing aggregate invocation so UP-TO-DATE cannot omit client emitters.
-check android env MIRRI_TIMING_EMITTER_DIR="$timing_dir" bash -c 'cd android-client && ./gradlew --rerun-tasks --continue --console=plain ktlintCheck detekt lintDebug testDebugUnitTest assembleDebug'
+check android env MIRRI_TIMING_EMITTER_DIR="$timing_dir" MIRRI_NETWORK_INTEROP=1 bash -c 'cd android-client && ./gradlew --rerun-tasks --continue --console=plain ktlintCheck detekt lintDebug testDebugUnitTest assembleDebug'
 check python-tests python_timing_tests
 exit "$failed"

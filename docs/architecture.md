@@ -177,7 +177,7 @@ production implementation in a test harness.
   publication and closed if stale. Handshake expiry snapshots old resources
   before interrupting their route; retry teardown is registered before awaiting
   route interruption so Stop joins it.
-* Host byte/media split: `ByteConnection`/`LoopbackByteListener` and
+* Host byte/media split: `ByteConnection`/`BoundedByteListener` and
   `NetworkByteConnection` own only ordered bytes, raw socket cancellation and
   the two-second write deadline. The byte adapter delivers final nonempty data
   once before reporting EOF on the next read, and its listener rejects a
@@ -195,7 +195,7 @@ production implementation in a test harness.
   package. `VideoReceiver` still reads directly into `EncodedBufferPool`'s
   direct buffers; `EncodedVideoConsumer` is implemented by `DecoderController`
   without media services importing Mirri wire/config types.
-* Source direction checks: `tools/check_source_boundaries.sh` and eight targeted
+* Source direction checks: `tools/check_source_boundaries.sh` and nine targeted
   forbidden-dependency probes in `tools/test_source_boundaries.sh` run in the
   aggregate quality gate. The guard prevents `SessionCoordinator` from importing
   Network or naming ADB/raw-loopback implementations. In-memory byte-fragment
@@ -204,5 +204,11 @@ production implementation in a test harness.
   tests and direct-buffer consumer tests exercise boundaries without a device.
 * USB performance and physical panel behavior after restructuring have **not**
   been measured; original capture/encoder/decoder settings remain unchanged.
-* Secured network streaming: next phase, not implemented by this decision alone.
+* Opt-in Network (USB setup) source implementation: `NetworkConnectionRoute`
+  shares bounded listener/byte transport, while `NetworkIdentity` supplies an
+  ephemeral pinned TLS identity; `NetworkBootstrap` handles authenticated
+  control epoch discovery above transport. Android's validated launch selects
+  the pinned `SSLSocket` connector or unchanged USB connector. See
+  [network decision, setup and verification](network-streaming.md). Source and
+  loopback checks do not establish actual tablet/network performance.
 * Wi-Fi Direct, Miracast and Chromecast: not claimed as supported.

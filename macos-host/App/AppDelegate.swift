@@ -19,6 +19,7 @@ import UniformTypeIdentifiers
       status: { [menu] snapshot in menu.update(snapshot) })
     menu.onSelect = { [weak self] device in self?.selected = device }
     menu.onStart = { [weak self] in self?.start() }
+    menu.onNetworkStart = { [weak self] address in self?.start(network: address) }
     menu.onStop = { [weak self] in
       guard let self else { return }
       Task { await self.stopSession() }
@@ -61,6 +62,7 @@ import UniformTypeIdentifiers
     }
   }
   private func refreshDevices() async {
+    menu.availableAddresses(LocalIPv4Address.available())
     let state = await coordinator.current().state
     guard state == .idle || state == .failed else { return }
     guard let discovered = try? await devices.discover() else { return }
@@ -82,13 +84,19 @@ import UniformTypeIdentifiers
       start()
     }
   }
-  private func start() {
+  private func start(network address: LocalIPv4Address? = nil) {
     guard let selected, pendingStart == nil else { return }
     pendingStart = Task { [weak self] in
       guard let self else { return }
       defer { pendingStart = nil }
       do {
-        let route = try await devices.route(on: selected)
+        let route: any HostConnectionRoute
+        if let address {
+          try address.validateCurrent()
+          route = try await devices.networkRoute(on: selected, address: address)
+        } else {
+          route = try await devices.route(on: selected)
+        }
         if Task.isCancelled {
           await route.close()
           return

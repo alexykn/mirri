@@ -1,10 +1,21 @@
 # Mirri Android client (runtime preview)
 
 `app` is the single Android module; the debug APK is produced at
-`app/build/outputs/apk/debug/app-debug.apk` (`versionCode=2`). It is not a
+`app/build/outputs/apk/debug/app-debug.apk` (`versionCode=3`). It is not a
 physically accepted release. **Do not install it on the tablet without an
 explicit owner action.** The Mac host launches it with the one-time token,
-epoch, protocol version, and the two USB `adb reverse` loopback ports.
+epoch, protocol version, mode, and either two USB `adb reverse` loopback ports
+or a pinned TLS IPv4 endpoint. Network (USB setup) needs an authorized initial
+USB launch but reconnects over the selected IP interface without ADB; both
+channels verify the pinned, nonexpired ephemeral certificate before any token
+is sent. The network control channel obtains the host's current epoch through
+the fixed MRNB preface inside TLS; USB framing and direct `SocketChannel`
+processing are unchanged. TLS uses bounded reusable 16 KiB input/output scratch
+buffers, not frame-sized heap copies. Wrong/expired server identity is terminal.
+This is **not** Wi-Fi Direct or a claim of device-verified network streaming.
+Desktop-JVM tests connect this production TLS connector to an ephemeral
+production macOS loopback server with a small synthetic payload and wrong-pin
+rejection; they are not a tablet connectivity or performance measurement.
 
 The AndroidX `ComponentActivity` collects a lifecycle-aware `StateFlow` status.
 Its immersive landscape `SurfaceView` selects/readbacks the exact physical
@@ -20,10 +31,10 @@ uses an asynchronous `MediaCodec` callback; configure, submit, flush and stop
 are serialized on the codec's HandlerThread. Cancellable fixed-pool leases
 return even after receive/cancellation failures. Codec probe, pool, decoder and
 receiver have separate owners; each attempt closes only its own resources;
-control and video are separate channels. No Wi-Fi or software decoder exists.
+control and video are separate channels. No Wi-Fi topology provisioning or software decoder exists.
 Each reconnect attempt owns its sockets, decoder, frame counters and failure
 gate, and finally closes those resources before detaching the Surface. After
-Stop, a fresh host `am start -S` launches a new activity/controller and epoch;
+USB Stop/retry needs a fresh host `am start -S` activity/controller and epoch;
 the host retains only its own reverse mappings/display within reconnect grace.
 Source tests cover old-attempt callback rejection and blocked-socket release,
 not activity restart or cable unplug/replug. Observed native AVC40 90-second

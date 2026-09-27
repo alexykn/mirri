@@ -14,6 +14,15 @@ public struct InstalledClient: Sendable {
   public let versionName: String
 }
 
+public struct NetworkLaunch: Sendable {
+  public let address: String
+  public let pin: Data
+  public init(address: String, pin: Data) {
+    self.address = address
+    self.pin = pin
+  }
+}
+
 private final class ProcessOutcome: @unchecked Sendable {
   private let lock = NSLock()
   private var finished = false
@@ -149,23 +158,34 @@ public actor ADBClient {
   public func removeReverse(remotePort: UInt16, device: ADBDevice) async -> Bool {
     (try? await on(device, ["reverse", "--remove", "tcp:\(remotePort)"])) != nil
   }
-  public func launchClient(device: ADBDevice, token: Data, epoch: UInt32) async throws {
+  public func launchClient(
+    device: ADBDevice, token: Data, epoch: UInt32, network: NetworkLaunch? = nil
+  ) async throws {
     let hex = token.map { String(format: "%02x", $0) }.joined()
+    let mode = network == nil ? "usb" : "network"
+    let networkExtras: [String] =
+      network.map { selected in
+        [
+          "--es", "mirri_host", selected.address,
+          "--es", "mirri_pin", selected.pin.map { String(format: "%02x", $0) }.joined(),
+        ]
+      } ?? []
     _ = try await on(
       device,
       [
         // Force-stop only Mirri before each fresh host epoch (including grace
         // reconnect). An old foreground activity can retain its completed
         // controller and miss a new intent; -S starts a new process/activity.
-        // SessionCoordinator first closes old sockets/capture and reclaims
-        // only its owned reverse ports. No app data or other package is reset.
+        // SessionCoordinator first closes old sockets/capture. The USB route
+        // separately retains its proved-owned reverse mappings; the network
+        // route never creates them. No other package or app data is reset.
         "shell", "am", "start", "-S", "-n",
         "\(Self.package)/.MainActivity", "--es", "mirri_token", hex,
         "--ei", "mirri_control_port", "5561",
         "--ei", "mirri_video_port", "5560",
         "--ei", "mirri_protocol_major", "1",
-        "--ei", "mirri_epoch", String(epoch),
-      ])
+        "--ei", "mirri_epoch", String(epoch), "--es", "mirri_mode", mode,
+      ] + networkExtras)
   }
   public func forceStopClient(device: ADBDevice) async {
     _ = try? await on(device, ["shell", "am", "force-stop", Self.package])

@@ -1,9 +1,15 @@
 import AppKit
 import MirriHostCore
 
+private final class NetworkMenuAddress: NSObject {
+  let value: LocalIPv4Address
+  init(_ value: LocalIPv4Address) { self.value = value }
+}
+
 @MainActor final class StatusMenuController: NSObject {
   private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
   var onStart: (() -> Void)?
+  var onNetworkStart: ((LocalIPv4Address) -> Void)?
   var onStop: (() -> Void)?
   var onReconnect: (() -> Void)?
   var onInstall: (() -> Void)?
@@ -20,12 +26,17 @@ import MirriHostCore
   var onGrace: ((Int) -> Void)?
   private var latest = HostSnapshot()
   private var devices: [ADBDevice] = []
+  private var addresses: [LocalIPv4Address] = []
   func update(_ snapshot: HostSnapshot) {
     latest = snapshot
     rebuild()
   }
   func discovered(_ devices: [ADBDevice]) {
     self.devices = devices
+    rebuild()
+  }
+  func availableAddresses(_ addresses: [LocalIPv4Address]) {
+    self.addresses = addresses
     rebuild()
   }
   override init() {
@@ -57,9 +68,17 @@ import MirriHostCore
       entry.tag = index
       menu.addItem(entry)
     }
-    let start = action("Start", #selector(startSession))
+    let start = action("Start USB", #selector(startSession))
     start.isEnabled = latest.state == .idle || latest.state == .failed
     menu.addItem(start)
+    for address in addresses {
+      let entry = action(
+        "Start Network (USB setup) · \(address.interface) \(address.address)",
+        #selector(startNetwork(_:)))
+      entry.representedObject = NetworkMenuAddress(address)
+      entry.isEnabled = start.isEnabled && !devices.isEmpty
+      menu.addItem(entry)
+    }
     let stop = action("Stop", #selector(stopSession))
     stop.isEnabled = latest.state != .idle && latest.state != .failed
     menu.addItem(stop)
@@ -123,6 +142,10 @@ import MirriHostCore
     if devices.indices.contains(sender.tag) { onSelect?(devices[sender.tag]) }
   }
   @objc private func startSession() { onStart?() }
+  @objc private func startNetwork(_ sender: NSMenuItem) {
+    guard let selected = sender.representedObject as? NetworkMenuAddress else { return }
+    onNetworkStart?(selected.value)
+  }
   @objc private func stopSession() { onStop?() }
   @objc private func reconnectSession() { onReconnect?() }
   @objc private func install() { onInstall?() }

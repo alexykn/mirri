@@ -26,6 +26,7 @@ suspend fun openVideo(
     val video = VideoChannel(connector.connect(port, owner))
     try {
         blockingBytes(video::close) { video.hello(epoch, id, token) }
+        video.finishSetup()
     } catch (e: Exception) {
         video.close()
         throw e
@@ -141,6 +142,8 @@ class VideoChannel(
     }
 
     fun readFully(buffer: ByteBuffer) = bytes.readFully(buffer)
+
+    fun finishSetup() = bytes.finishSetup()
 
     override fun close() = bytes.close()
 }

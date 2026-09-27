@@ -2,6 +2,7 @@ included:
   - macos-host/Core
   - macos-host/App
   - macos-host/Tests
+  - macos-host/Tools
 excluded:
   - macos-host/.build
   - macos-host/build

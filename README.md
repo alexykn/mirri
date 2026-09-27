@@ -1,6 +1,6 @@
 # Mirri
 
-Mirri is a native USB second-display bridge in development for a Huawei MatePad 11.5
+Mirri is a native second-display bridge in development for a Huawei MatePad 11.5
 (2025), model TXZ-W09, and an Apple Silicon Mac. The name is derived from
 “mirror,” but the primary goal is a real **extended macOS display**, not simple
 screen mirroring.
@@ -20,6 +20,10 @@ duration gate. See [privacy-safe physical evidence](docs/native-validation.md).
 An experimental lower-resolution trial streamed slower and was removed at
 the owner's direction; the retained path remains full-native quality.
 Source builds and pure/localhost tests are separate from physical acceptance.
+An opt-in **Network (USB setup)** path now has source/localhost validation: it
+uses a selected local IPv4 address and pinned TLS after an initial USB launch.
+Neither network streaming nor unplug/reconnect or network performance has been
+validated on a tablet; see [network setup and limits](docs/network-streaming.md).
 The debug APK is not a release package; never install or upgrade it on a
 tablet without the owner's explicit decision.
 
@@ -52,8 +56,10 @@ flow, error handling, verification strategy and delivery milestones are in
 - automatic recovery from an Android activity restart or temporary USB
   disconnect.
 
-Wi-Fi, audio, HDR, portrait operation, Bluetooth tablet mode and general
-support for unrelated Android devices are not part of the first release.
+The first-release target remains USB. Opt-in network transport is a separate
+USB-bootstrap preview, not Wi-Fi Direct. Audio, HDR, portrait operation,
+Bluetooth tablet mode and general support for unrelated Android devices are
+not part of the first release.
 
 ## Runtime implementation
 
@@ -162,10 +168,10 @@ brew install swiftlint # require SwiftLint 0.65.1; script rejects version drift
 ./tools/check_quality.sh
 # Detailed cyclomatic offenders: logs/quality/python-complexity-detail.log
 
-swift format lint -r --strict macos-host/Core macos-host/Tests macos-host/App
+swift format lint -r --strict macos-host/Core macos-host/Tests macos-host/App macos-host/Tools
 (cd android-client && ./gradlew ktlintCheck)
 # Optional explicit formatting (run check separately after formatting):
-swift format format -i -r macos-host/Core macos-host/Tests macos-host/App
+swift format format -i -r macos-host/Core macos-host/Tests macos-host/App macos-host/Tools
 (cd android-client && ./gradlew ktlintFormat)
 uv run --offline python tools/benchmark_transport.py --mebibytes 16
 uv run --offline python tools/summarize_session.py /path/to/local/host.log

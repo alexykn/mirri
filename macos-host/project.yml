@@ -6,6 +6,16 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     CODE_SIGNING_ALLOWED: NO
+packages:
+  swift-certificates:
+    url: https://github.com/apple/swift-certificates.git
+    version: 1.21.0
+  swift-crypto:
+    url: https://github.com/apple/swift-crypto.git
+    version: 5.0.0
+  swift-asn1:
+    url: https://github.com/apple/swift-asn1.git
+    version: 1.7.3
 targets:
   MirriHostCore:
     type: framework
@@ -15,9 +25,16 @@ targets:
     dependencies:
       - target: VirtualDisplayShim
         link: true
+      - package: swift-certificates
+        product: X509
+      - package: swift-crypto
+        product: Crypto
+      - package: swift-asn1
+        product: SwiftASN1
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
         SWIFT_INCLUDE_PATHS: "$(SRCROOT)/VirtualDisplayShim/include"
   VirtualDisplayShim:
     type: library.static
@@ -39,7 +56,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.mirri.host
         GENERATE_INFOPLIST_FILE: YES
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
         INFOPLIST_KEY_NSScreenCaptureUsageDescription: Mirri displays this Mac's extended desktop on your USB tablet.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Mirri connects to the selected tablet over the explicitly chosen local IPv4 address in Network (USB setup) mode.
         INFOPLIST_KEY_LSUIElement: YES
   MirriHostTests:
     type: bundle.unit-test
@@ -51,6 +70,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
 schemes:
   MirriHost:
     build:

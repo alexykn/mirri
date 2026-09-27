@@ -610,7 +610,12 @@ final class HostRuntimeTests: XCTestCase {
           "-s", "synthetic", "shell", "am", "start", "-S", "-n", "dev.mirri.client/.MainActivity",
         ])
       XCTAssertEqual(arguments.filter { $0 == "-S" }.count, 1)
-      XCTAssertEqual(arguments.last, Substring(String(index + 1)))
+      if let epochArgument = arguments.firstIndex(of: "mirri_epoch") {
+        XCTAssertEqual(arguments[epochArgument + 1], Substring(String(index + 1)))
+      } else {
+        XCTFail("launch must carry host epoch")
+      }
+      XCTAssertEqual(arguments.suffix(3).map(String.init), ["--es", "mirri_mode", "usb"])
       XCTAssertFalse(invocation.contains("force-stop"))
     }
   }

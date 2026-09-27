@@ -39,7 +39,7 @@ final class LoopbackTests: XCTestCase {
       .deletingLastPathComponent().appendingPathComponent("protocol/fixtures")
   }
   func testLoopbackOrderedMessagesAndClose() async throws {
-    let listener = try LoopbackByteListener(port: 0, noDelay: true)
+    let listener = try BoundedByteListener(port: 0, noDelay: true, address: "127.0.0.1")
     let port = try await listener.boundPort()
     let incoming = Task { try await listener.accept() }
     let client = WireConnection(
@@ -101,7 +101,7 @@ final class LoopbackTests: XCTestCase {
     }
   }
   func testAdapterDeliversFinalBytesBeforeHalfCloseEOF() async throws {
-    let listener = try LoopbackByteListener(port: 0)
+    let listener = try BoundedByteListener(port: 0, address: "127.0.0.1")
     defer { listener.close() }
     let port = try await listener.boundPort()
     let accepting = Task { try await listener.accept() }
@@ -144,7 +144,7 @@ final class LoopbackTests: XCTestCase {
     await server.close()
   }
   func testConcurrentListenerAcceptFailsInsteadOfLosingPendingReader() async throws {
-    let listener = try LoopbackByteListener(port: 0)
+    let listener = try BoundedByteListener(port: 0, address: "127.0.0.1")
     defer { listener.close() }
     let first = Task { try await listener.accept() }
     for _ in 0..<100 {
