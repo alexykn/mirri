@@ -11,7 +11,7 @@ public enum HostFailure: Error, LocalizedError, Sendable, Equatable {
     case .incompatible: "Client rejected the fixed resolution, refresh or hardware codec"
     case .exactDisplay: "Cannot publish the exact 2456x1600 at 60 Hz virtual display"
     case .hardwareCodec: "No hardware encoder accepts the exact format"
-    case .transport: "USB loopback transport closed"
+    case .transport: "Connection interrupted. Check the tablet and selected connection"
     case .invalidState: "Invalid session transition"
     case .timeout: "Session handshake timed out"
     case .malformed: "Invalid protocol message"

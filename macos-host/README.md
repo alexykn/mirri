@@ -15,13 +15,31 @@ xcodebuild -project MirriHost.xcodeproj -scheme MirriHost \
 Start only after Screen Recording and Accessibility permissions have been
 granted to the **same stable app bundle identity** (a release build must be
 signed consistently). Select an authorized physical USB device.
-For USB, choose **Start USB**; it binds only 127.0.0.1 and requires installed
+Click the Mirri display icon in the menu bar to toggle its compact connection
+popover (Escape or a click elsewhere dismisses it). Choose **USB** or **Network**,
+the USB tablet, and (for Network) a currently assigned Mac IPv4 interface; then
+press **Connect**. Progress, authorization/discovery issues and next steps appear
+in the same popover. **Cancel** during setup or **Disconnect** while streaming;
+**Reconnect** is available for an active stream. Collapsed **Settings** apply
+to the next connection; **Advanced** contains remember/forget USB auto-connect,
+explicit APK installation and owned reverse-port cleanup. Logs and Quit remain
+in the short footer below these sections. Device selection and mode are
+locked during connection/streaming; if an idle Mac address disappears, choose a
+new one explicitly rather than silently switching endpoints. Opening the
+popover does not request permissions or start a session. For a safe inspection
+of the development build without remembered USB auto-connect, launch its
+executable with `--no-auto-connect --show-connection`; this does not simulate
+connectivity or alter device permissions. Do not overwrite an already-running
+development app when inspecting another build.
+
+For USB, choose **USB** and **Connect**; it binds only 127.0.0.1 and requires installed
 client `versionCode >= 2`. For **Network (USB setup)**, first put Mac and tablet
 on an already reachable IP network (ordinary shared Wi-Fi LAN or tablet hotspot),
 keep the authorized USB cable attached for the initial launch, install the
 debug client `versionCode >= 3` **only with explicit owner approval**, and select
-the device. In the menu choose **Start Network (USB setup) · <interface> <IPv4>**
-for the exact current Mac address that the tablet can reach. Mirri rechecks that
+the device. Choose **Network**, select the explicit Mac interface/IPv4 that
+the tablet can reach, then **Connect**. Interface names appear when macOS
+provides them; Mirri does not guess which address is reachable. Mirri rechecks that
 interface/address before binding only it at TCP 5560/5561; a change fails rather
 than binding another address. Allow macOS Local Network permission and inbound
 traffic to those ports for the app in the firewall. The tablet must reach the
@@ -34,7 +52,7 @@ Wi-Fi Aware, IPv6, or physical-network performance claim is provided. The
 USB-only diagnostics below do not establish network-mode hardware behavior.
 The source-level synthetic cross-platform test runs an ephemeral SwiftPM TLS
 server against the desktop-JVM Android connector; it does **not** open tablet
-connections or prove shared-LAN reachability. In **Settings (next session)**,
+connections or prove shared-LAN reachability. In **Settings · next connection**,
 choose native 2456×1600 logical points or
 1228×800 logical HiDPI (2× backing). Selection persists, applies only on the
 next Start, and fails closed unless macOS reports the requested logical mode,
