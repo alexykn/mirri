@@ -7,6 +7,7 @@ import dev.mirri.client.protocol.ContextSource
 import dev.mirri.client.protocol.GesturePhase
 import dev.mirri.client.protocol.InputEvent
 import dev.mirri.client.protocol.PointerTool
+import dev.mirri.client.session.ClientLaunchBoundary
 import dev.mirri.client.session.ReconnectPolicy
 import dev.mirri.client.video.DecoderChoice
 import dev.mirri.client.video.DecoderFrameAges
@@ -36,6 +37,20 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class ClientRuntimeTest {
+    @Test fun launchBoundaryProducesOnlyValidatedLoopbackCredentials() {
+        val token = "ab".repeat(32)
+        val launch = ClientLaunchBoundary.validated(token, 7, 5561, 5560, 1) ?: error("valid launch rejected")
+        assertEquals(7u, launch.epoch)
+        assertEquals(5561, launch.endpoint.controlPort)
+        assertEquals(5560, launch.endpoint.videoPort)
+        assertTrue(launch.token.all { it == 0xab.toByte() })
+        assertEquals(null, ClientLaunchBoundary.validated(token.uppercase(), 7, 5561, 5560, 1))
+        assertEquals(null, ClientLaunchBoundary.validated(token, 0, 5561, 5560, 1))
+        assertEquals(null, ClientLaunchBoundary.validated(token, 7, 5561, 5560, 2))
+        assertEquals(null, ClientLaunchBoundary.validated(token, 7, 5562, 5560, 1))
+        assertEquals(null, ClientLaunchBoundary.validated(token, 7, 5561, 5562, 1))
+    }
+
     @Test fun displayOwnerWaitsForRealExactTransitionAndCancelsListenerOnTimeout() =
         runBlocking {
             val requested = ModeDetails(1, 1600, 2456, 60000)

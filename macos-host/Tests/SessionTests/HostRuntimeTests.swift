@@ -57,6 +57,112 @@ private actor PausedLifecycleStatus {
   func open() async { await release.signal() }
 }
 
+private actor FakeRoute: HostConnectionRoute {
+  nonisolated let displayLabel = "synthetic"
+  private let suspendPreparation: Bool
+  private let entered = OneShotSignal()
+  private let release = OneShotSignal()
+  private(set) var closed = false
+  init(suspendPreparation: Bool = false) { self.suspendPreparation = suspendPreparation }
+  func prepare() async throws -> String {
+    await entered.signal()
+    if suspendPreparation { _ = await release.wait() }
+    guard !closed else { throw HostFailure.invalidState }
+    return displayLabel
+  }
+  func waitForPreparation(timeout: Duration = .seconds(2)) async -> Bool {
+    await entered.wait(timeout: timeout)
+  }
+  func isClosed() -> Bool { closed }
+  func retry() throws { throw HostFailure.transport }
+  func bootstrap(_ credentials: AttemptCredentials) throws { throw HostFailure.transport }
+  func acceptControl() throws -> any ByteConnection { throw HostFailure.transport }
+  func acceptVideo() throws -> any ByteConnection { throw HostFailure.transport }
+  func interrupt() {}
+  func close() async {
+    closed = true
+    await release.signal()
+  }
+}
+
+private actor DeliveredBytes: ByteConnection {
+  private let receiving = OneShotSignal()
+  private var reader: CheckedContinuation<Data, Error>?
+  private var closed = false
+  func receive() async throws -> Data {
+    if closed { throw HostFailure.transport }
+    await receiving.signal()
+    return try await withCheckedThrowingContinuation { reader = $0 }
+  }
+  func waitForRead() async -> Bool { await receiving.wait(timeout: .seconds(2)) }
+  func write(_ bytes: Data) throws { if closed { throw HostFailure.transport } }
+  func close() {
+    closed = true
+    reader?.resume(throwing: HostFailure.transport)
+    reader = nil
+  }
+  func isClosed() -> Bool { closed }
+}
+
+/// Deliberately violates the route's normal close guarantee to exercise a late cross-actor return.
+private actor LateDeliveryRoute: HostConnectionRoute {
+  nonisolated let displayLabel = "late-delivery"
+  let controlBytes = DeliveredBytes()
+  let videoBytes = DeliveredBytes()
+  private let controlRequested = OneShotSignal()
+  private let videoRequested = OneShotSignal()
+  private let delivery = OneShotSignal()
+  private let interrupted = OneShotSignal()
+  private let resumeInterrupt = OneShotSignal()
+  private let delayed: Bool
+  private let suspendInterrupt: Bool
+  init(delayed: Bool, suspendInterrupt: Bool = false) {
+    self.delayed = delayed
+    self.suspendInterrupt = suspendInterrupt
+  }
+  func prepare() -> String { displayLabel }
+  func retry() throws { throw HostFailure.transport }
+  func bootstrap(_ credentials: AttemptCredentials) {}
+  func acceptControl() async -> any ByteConnection {
+    await controlRequested.signal()
+    if delayed { _ = await delivery.wait() }
+    return controlBytes
+  }
+  func acceptVideo() async -> any ByteConnection {
+    await videoRequested.signal()
+    if delayed { _ = await delivery.wait() }
+    return videoBytes
+  }
+  func controlEntered() async -> Bool { await controlRequested.wait(timeout: .seconds(2)) }
+  func videoEntered() async -> Bool { await videoRequested.wait(timeout: .seconds(2)) }
+  func deliver() async { await delivery.signal() }
+  func interruptEntered() async -> Bool { await interrupted.wait(timeout: .seconds(2)) }
+  func finishInterrupt() async { await resumeInterrupt.signal() }
+  func interrupt() async {
+    await interrupted.signal()
+    if suspendInterrupt { _ = await resumeInterrupt.wait() }
+  }
+  func close() {}
+}
+
+private actor HeldSink: EncodedVideoSink {
+  private let entered = OneShotSignal()
+  private var pending: CheckedContinuation<Void, Error>?
+  func write(_ unit: EncodedUnit, ordinal: UInt64) async throws {
+    await entered.signal()
+    try await withCheckedThrowingContinuation { pending = $0 }
+  }
+  func waitForWrite() async -> Bool { await entered.wait(timeout: .seconds(2)) }
+  func complete(failing: Bool = false) {
+    if failing {
+      pending?.resume(throwing: HostFailure.transport)
+    } else {
+      pending?.resume()
+    }
+    pending = nil
+  }
+}
+
 final class HostRuntimeTests: XCTestCase {
   private var fixtures: URL {
     URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -184,6 +290,203 @@ final class HostRuntimeTests: XCTestCase {
     XCTAssertEqual(ClientEpochDisposition.compare(received: 3, expected: 2), .future)
     XCTAssertEqual(ClientEpochDisposition.compare(received: 0, expected: 1), .stale)
   }
+  func testStopClosesRouteDuringSuspendedPreparationBeforeItCanBootstrap() async {
+    let route = FakeRoute(suspendPreparation: true)
+    let coordinator = SessionCoordinator(permissions: { true }, status: { _ in })
+    let start = Task { await coordinator.start(route: route) }
+    let entered = await route.waitForPreparation()
+    XCTAssertTrue(entered)
+    await coordinator.stop()
+    await start.value
+    let stopped = await route.isClosed()
+    let state = await coordinator.current().state
+    XCTAssertTrue(stopped)
+    XCTAssertEqual(state, .idle)
+  }
+  func testCancelledLateStartClosesRouteWithoutLeavingIdle() async {
+    let coordinator = SessionCoordinator(permissions: { true }, status: { _ in })
+    let route = FakeRoute()
+    let gate = OneShotSignal()
+    let queued = Task {
+      _ = await gate.wait()
+      await coordinator.start(route: route)
+    }
+    queued.cancel()
+    await coordinator.stop()  // Runs while still idle, before the cancelled call can enter.
+    await gate.signal()
+    await queued.value
+    let closed = await route.isClosed()
+    let entered = await route.waitForPreparation(timeout: .milliseconds(30))
+    let state = await coordinator.current().state
+    XCTAssertTrue(closed)
+    XCTAssertFalse(entered)
+    XCTAssertEqual(state, .idle)
+  }
+  func testLateRouteAcceptCannotReplaceNextAttemptControlOrVideo() async throws {
+    let coordinator = SessionCoordinator(permissions: { true }, status: { _ in })
+    let old = LateDeliveryRoute(delayed: true)
+    let oldStart = Task { await coordinator.start(route: old) }  // Incarnation 1, epoch 1.
+    let oldControlEntered = await old.controlEntered()
+    XCTAssertTrue(oldControlEntered)
+    // Exercise the production channel-claim path for video without setting up
+    // hardware display/codec negotiation merely to reach the second accept.
+    let oldVideo = Task {
+      try await coordinator.acceptChannel(
+        from: old, incarnation: 1, epoch: 1, videoChannel: true)
+    }
+    let oldVideoEntered = await old.videoEntered()
+    XCTAssertTrue(oldVideoEntered)
+    await coordinator.stop()  // Incarnation 2; the fake can still deliver both stale accepts.
+
+    let next = LateDeliveryRoute(delayed: false)
+    let nextStart = Task { await coordinator.start(route: next) }  // Incarnation 3.
+    let nextReading = await next.controlBytes.waitForRead()
+    XCTAssertTrue(nextReading)
+    _ = try await coordinator.acceptChannel(
+      from: next, incarnation: 3, epoch: 1, videoChannel: true)
+    await old.deliver()
+    await oldStart.value
+    do {
+      _ = try await oldVideo.value
+      XCTFail("stale video accept should not publish")
+    } catch {
+      XCTAssertEqual(error as? HostFailure, .invalidState)
+    }
+    let oldControlClosed = await old.controlBytes.isClosed()
+    let oldVideoClosed = await old.videoBytes.isClosed()
+    let nextControlClosed = await next.controlBytes.isClosed()
+    let nextVideoClosed = await next.videoBytes.isClosed()
+    XCTAssertTrue(oldControlClosed)
+    XCTAssertTrue(oldVideoClosed)
+    XCTAssertFalse(nextControlClosed)
+    XCTAssertFalse(nextVideoClosed)
+    await coordinator.stop()
+    await nextStart.value
+    let nextControlReleased = await next.controlBytes.isClosed()
+    let nextVideoReleased = await next.videoBytes.isClosed()
+    XCTAssertTrue(nextControlReleased)
+    XCTAssertTrue(nextVideoReleased)
+  }
+  func testOldHandshakeExpiryCannotCloseNewChannelsAfterInterruptedRouteReturns() async {
+    let coordinator = SessionCoordinator(permissions: { true }, status: { _ in })
+    let old = LateDeliveryRoute(delayed: false, suspendInterrupt: true)
+    let oldStart = Task { await coordinator.start(route: old) }
+    let oldReading = await old.controlBytes.waitForRead()
+    XCTAssertTrue(oldReading)
+    let expiry = Task { await coordinator.expireHandshake(incarnation: 1, epoch: 1) }
+    let interruption = await old.interruptEntered()
+    XCTAssertTrue(interruption)
+    await coordinator.stop()
+    let next = LateDeliveryRoute(delayed: false)
+    let nextStart = Task { await coordinator.start(route: next) }
+    let nextReading = await next.controlBytes.waitForRead()
+    XCTAssertTrue(nextReading)
+    await old.finishInterrupt()
+    await expiry.value
+    let nextClosed = await next.controlBytes.isClosed()
+    XCTAssertFalse(nextClosed)
+    await coordinator.stop()
+    await oldStart.value
+    await nextStart.value
+  }
+  func testClosedUsbRouteCannotBindAfterPendingAdbDiscoveryCompletes() async throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let entered = folder.appendingPathComponent("entered")
+    let proceed = folder.appendingPathComponent("proceed")
+    let executable = folder.appendingPathComponent("fake-adb")
+    let script = """
+      #!/bin/sh
+      if [ "$1" = devices ]; then
+        touch "\(entered.path)"
+        while [ ! -f "\(proceed.path)" ]; do sleep 0.01; done
+        printf 'List of devices attached\nA device usb:1 model:synthetic\n'
+      fi
+      """
+    try Data(script.utf8).write(to: executable)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+    let service = USBDeviceService(adb: ADBClient(executable: executable, commandTimeout: 3))
+    let route = try await service.route(on: ADBDevice(serial: "A", model: "synthetic"))
+    let preparing = Task { try await route.prepare() }
+    for _ in 0..<100 where !FileManager.default.fileExists(atPath: entered.path) {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertTrue(FileManager.default.fileExists(atPath: entered.path))
+    let finished = folder.appendingPathComponent("finished")
+    let closing = Task {
+      await route.close()
+      try Data().write(to: finished)
+    }
+    for _ in 0..<100 {
+      if await route.closureStarted { break }
+      await Task.yield()
+    }
+    let closureStarted = await route.closureStarted
+    XCTAssertTrue(closureStarted)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: finished.path))
+    try Data().write(to: proceed)
+    try await closing.value
+    do {
+      _ = try await preparing.value
+      XCTFail("closed route must not publish listeners after discovery")
+    } catch {
+      XCTAssertEqual(error as? HostFailure, .invalidState)
+    }
+    let fresh = try await service.route(on: ADBDevice(serial: "A", model: "synthetic"))
+    await fresh.close()
+  }
+  func testUsbRouteCloseJoinsPendingClientLaunchBeforeReleasingService() async throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let entered = folder.appendingPathComponent("entered")
+    let proceed = folder.appendingPathComponent("proceed")
+    let executable = folder.appendingPathComponent("fake-adb")
+    let script = """
+      #!/bin/sh
+      if [ "$4" = am ]; then
+        touch "\(entered.path)"
+        while [ ! -f "\(proceed.path)" ]; do sleep 0.01; done
+      fi
+      """
+    try Data(script.utf8).write(to: executable)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+    let service = USBDeviceService(adb: ADBClient(executable: executable, commandTimeout: 3))
+    let device = ADBDevice(serial: "A", model: "synthetic")
+    let route = try await service.route(on: device)
+    let credentials = AttemptCredentials(
+      token: Data(repeating: 1, count: 32),
+      sessionId: Data(repeating: 2, count: 16), epoch: 1)
+    let launching = Task { try await route.bootstrap(credentials) }
+    for _ in 0..<100 where !FileManager.default.fileExists(atPath: entered.path) {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertTrue(FileManager.default.fileExists(atPath: entered.path))
+    let closing = Task { await route.close() }
+    for _ in 0..<100 {
+      if await route.closureStarted { break }
+      await Task.yield()
+    }
+    let closed = await route.closureStarted
+    XCTAssertTrue(closed)
+    do {
+      _ = try await service.route(on: device)
+      XCTFail("service must not release route during an in-flight client launch")
+    } catch {
+      XCTAssertEqual(error as? HostFailure, .invalidState)
+    }
+    try Data().write(to: proceed)
+    await closing.value
+    do {
+      try await launching.value
+      XCTFail("late launch completion must not revive a closed route")
+    } catch {
+      XCTAssertEqual(error as? HostFailure, .invalidState)
+    }
+    let next = try await service.route(on: device)
+    await next.close()
+  }
   @MainActor func testCoordinatorClaimsStopAndRejectsStaleTransportCallback() async {
     var snapshots: [HostState] = []
     let logDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -193,7 +496,7 @@ final class HostRuntimeTests: XCTestCase {
       permissions: { false }, status: { snapshots.append($0.state) },
       logger: SessionLogger(directory: logDirectory)
     )
-    await coordinator.start(device: ADBDevice(serial: "synthetic", model: "synthetic"))
+    await coordinator.start(route: FakeRoute())
     let failed = await coordinator.current().state
     XCTAssertEqual(failed, .failed)
     async let first: Void = coordinator.stop()
@@ -217,7 +520,7 @@ final class HostRuntimeTests: XCTestCase {
       logger: SessionLogger(directory: logDirectory)
     )
     let start = Task {
-      await coordinator.start(device: ADBDevice(serial: "synthetic", model: "synthetic"))
+      await coordinator.start(route: FakeRoute())
     }
     let entered = await gate.waitUntilEntered(timeout: .seconds(2))
     guard entered else {
@@ -248,7 +551,7 @@ final class HostRuntimeTests: XCTestCase {
       permissions: { false }, status: { await gate.handle($0) },
       logger: SessionLogger(directory: logDirectory)
     )
-    await coordinator.start(device: ADBDevice(serial: "synthetic", model: "synthetic"))
+    await coordinator.start(route: FakeRoute())
     let firstStop = Task { await coordinator.stop() }
     let entered = await gate.waitUntilEntered(timeout: .seconds(2))
     guard entered else {
@@ -517,6 +820,51 @@ final class HostRuntimeTests: XCTestCase {
     admission.release()
     XCTAssertEqual(admission.depth, 0)
     XCTAssertFalse(admission.reserve())
+  }
+  func testEncodedSinkHoldsCreditThroughWriteAndStopJoinsInFlightCompletion() async {
+    let sink = HeldSink()
+    let admission = VideoAdmission()
+    let sender = VideoSender(sink: sink, gate: admission)
+    let unit = EncodedUnit(
+      accessUnit: Data([0, 0, 0, 1, 0x65]), parameterSets: [Data([1]), Data([2])],
+      keyframe: true, pts: 0, encodeLatencyMs: 0, submittedNs: 1,
+      captureCallbackNs: 1, encoderCallbackNs: 1, convertedNs: 1)
+    XCTAssertTrue(admission.reserve())
+    sender.enqueue(unit)
+    let entered = await sink.waitForWrite()
+    XCTAssertTrue(entered)
+    XCTAssertEqual(admission.depth, 1)
+    let finished = OneShotSignal()
+    let stopping = Task {
+      await sender.stop()
+      await finished.signal()
+    }
+    let premature = await finished.wait(timeout: .milliseconds(50))
+    XCTAssertFalse(premature)
+    XCTAssertEqual(admission.depth, 1)
+    await sink.complete()
+    await stopping.value
+    XCTAssertEqual(admission.depth, 0)
+  }
+  func testFailingSinkReleasesCreditAndReportsFailure() async {
+    let sink = HeldSink()
+    let admission = VideoAdmission()
+    let sender = VideoSender(sink: sink, gate: admission)
+    let failure = OneShotSignal()
+    sender.onFailure = { Task { await failure.signal() } }
+    let unit = EncodedUnit(
+      accessUnit: Data([0, 0, 0, 1, 0x65]), parameterSets: nil, keyframe: true,
+      pts: 0, encodeLatencyMs: 0, submittedNs: 1, captureCallbackNs: 1,
+      encoderCallbackNs: 1, convertedNs: 1)
+    XCTAssertTrue(admission.reserve())
+    sender.enqueue(unit)
+    let entered = await sink.waitForWrite()
+    XCTAssertTrue(entered)
+    await sink.complete(failing: true)
+    await sender.stop()
+    XCTAssertEqual(admission.depth, 0)
+    let reported = await failure.wait(timeout: .seconds(1))
+    XCTAssertTrue(reported)
   }
   func testActualEncoderPendingCallbackOwnerNormalInlineErrorDropAndInvalidate() throws {
     // Exercise the same owner used by VideoEncoder.encode and its VT callback,

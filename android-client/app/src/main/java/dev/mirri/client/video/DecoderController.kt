@@ -6,8 +6,6 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
-import dev.mirri.client.protocol.VideoCodecId
-import dev.mirri.client.protocol.WireException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -51,7 +49,7 @@ class DecoderController(
     private val onOutput: () -> Unit,
     private val onInput: () -> Unit,
     private val timing: VideoTimingOwner,
-) {
+) : EncodedVideoConsumer {
     private val thread = HandlerThread("mirri-decoder").also { it.start() }
     private val handler = Handler(thread.looper)
     private var codec: MediaCodec? = null
@@ -66,7 +64,7 @@ class DecoderController(
         DecoderInputIndices {
             if (active.get()) {
                 Log.w("MirriDecoder", "decoder index lease lost")
-                onFailure(WireException("decoder index lease lost"))
+                onFailure(DecoderFailure("decoder index lease lost"))
             }
         }
 
@@ -84,7 +82,7 @@ class DecoderController(
                     }
                 }
             ) {
-                continuation.resumeWithException(WireException("decoder owner stopped"))
+                continuation.resumeWithException(DecoderFailure("decoder owner stopped"))
             }
         }
 
@@ -109,7 +107,7 @@ class DecoderController(
                         if (!indices.offer(index)) {
                             timing.forgetInputIndex(index)
                             Log.w("MirriDecoder", "decoder input index queue full")
-                            onFailure(WireException("decoder input queue full"))
+                            onFailure(DecoderFailure("decoder input queue full"))
                         }
                     }
 
@@ -175,7 +173,7 @@ class DecoderController(
                             "output format coded=${width}x$height crop=$left,$top,$right,$bottom standard=$standard range=$range visibleExact=${!wrongSize} colorExact=${!wrongStandard && !wrongRange}",
                         )
                         if (wrongStandard || wrongRange || wrongSize) {
-                            onFailure(WireException("decoder output format mismatch"))
+                            onFailure(DecoderFailure("decoder output format mismatch"))
                         }
                     }
 
@@ -193,7 +191,7 @@ class DecoderController(
             )
             val format =
                 MediaFormat.createVideoFormat(
-                    if (choice.codec == VideoCodecId.AVC.wire) {
+                    if (choice.codec == MediaCodecKind.AVC.id) {
                         MediaFormat.MIMETYPE_VIDEO_AVC
                     } else {
                         MediaFormat.MIMETYPE_VIDEO_HEVC
@@ -228,7 +226,19 @@ class DecoderController(
         }
     }
 
-    suspend fun submit(
+    override suspend fun submitConfiguration(data: ByteBuffer) {
+        submit(data, 0, config = true)
+    }
+
+    override suspend fun submitAccessUnit(
+        data: ByteBuffer,
+        ptsNs: Long,
+        receivedAtNs: Long,
+    ) {
+        submit(data, ptsNs, receivedAtNs = receivedAtNs)
+    }
+
+    private suspend fun submit(
         data: ByteBuffer,
         ptsNs: Long,
         config: Boolean = false,
@@ -240,10 +250,10 @@ class DecoderController(
         // if the receive coroutine is cancelled, then release the pool lease.
         withContext(NonCancellable) {
             onOwner {
-                val c = codec ?: throw WireException("decoder stopped")
-                val input = c.getInputBuffer(index) ?: throw WireException("decoder input unavailable")
+                val c = codec ?: throw DecoderFailure("decoder stopped")
+                val input = c.getInputBuffer(index) ?: throw DecoderFailure("decoder input unavailable")
                 input.clear()
-                if (input.remaining() < data.remaining()) throw WireException("decoder input too small")
+                if (input.remaining() < data.remaining()) throw DecoderFailure("decoder input too small")
                 val length = data.remaining()
                 input.put(data)
                 val codecPtsUs = ptsNs / 1000
@@ -257,9 +267,9 @@ class DecoderController(
         }
     }
 
-    suspend fun flushForDiscontinuity() =
+    override suspend fun flushForDiscontinuity() =
         onOwner {
-            val c = codec ?: throw WireException("decoder stopped")
+            val c = codec ?: throw DecoderFailure("decoder stopped")
             indices.clear()
             frameAges.clearPending()
             c.flush()

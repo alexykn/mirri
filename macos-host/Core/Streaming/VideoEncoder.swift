@@ -14,6 +14,16 @@ public enum VideoCodec: UInt64, Sendable {
   var sets: Int { self == .avc ? 2 : 3 }
 }
 
+/// Encoder-only settings; no session identity or negotiated wire fields enter media capture.
+public struct EncodingSettings: Sendable {
+  public let codec: VideoCodec
+  public let bitrate: UInt32
+  public init(codec: VideoCodec, bitrate: UInt32) {
+    self.codec = codec
+    self.bitrate = bitrate
+  }
+}
+
 public struct EncodedUnit: @unchecked Sendable {
   public let accessUnit: Data
   public let parameterSets: [Data]?

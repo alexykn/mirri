@@ -56,6 +56,7 @@ check python-format uv run --locked ruff format --check protocol/generate_fixtur
 check python-lint uv run --locked ruff check protocol/generate_fixtures.py tools
 check python-types uv run --locked ty check protocol/generate_fixtures.py tools
 check protocol-fixtures uv run --locked python tools/compare_protocol_fixtures.py
+check source-boundaries bash tools/test_source_boundaries.sh
 check python-complexity uv run --locked xenon --max-absolute B protocol/generate_fixtures.py tools
 check python-complexity-detail uv run --locked radon cc -s -n C protocol/generate_fixtures.py tools
 check swift-format swift format lint -r --strict macos-host/Core macos-host/Tests macos-host/App

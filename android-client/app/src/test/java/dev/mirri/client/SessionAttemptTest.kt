@@ -1,11 +1,11 @@
 package dev.mirri.client
 
+import dev.mirri.client.protocol.ControlChannel
 import dev.mirri.client.protocol.WireException
 import dev.mirri.client.protocol.WireOrder
 import dev.mirri.client.session.ClientAttempt
-import dev.mirri.client.transport.ControlChannel
-import dev.mirri.client.transport.blockingSocket
-import dev.mirri.client.transport.connect
+import dev.mirri.client.transport.LoopbackTcpConnector
+import dev.mirri.client.transport.blockingBytes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -18,6 +18,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.InetSocketAddress
+import java.nio.ByteBuffer
 import java.nio.channels.ServerSocketChannel
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -57,16 +58,16 @@ class SessionAttemptTest {
             ServerSocketChannel.open().use { server ->
                 server.bind(InetSocketAddress("127.0.0.1", 0))
                 val owner = ClientAttempt()
-                val socket = connect((server.localAddress as InetSocketAddress).port, owner.sockets)
+                val bytes = LoopbackTcpConnector.connect((server.localAddress as InetSocketAddress).port, owner.connections)
                 server.accept().use {
                     val writerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-                    val channel = ControlChannel(socket, writerScope) {}
+                    val channel = ControlChannel(bytes, writerScope) {}
                     owner.control = channel
                     val reading = CountDownLatch(1)
                     val read =
                         async(Dispatchers.IO) {
                             runCatching {
-                                blockingSocket(channel::close) {
+                                blockingBytes(channel::close) {
                                     reading.countDown()
                                     channel.read(WireOrder(WireOrder.Peer.HOST, WireOrder.Channel.CONTROL, 1uL))
                                 }
@@ -90,7 +91,7 @@ class SessionAttemptTest {
                         )
                         owner.reportDecoderFailure({ WireException("stale callback") }) { reports.incrementAndGet() }
                         assertEquals(1, reports.get())
-                        assertFalse(socket.isOpen)
+                        assertTrue(runCatching { bytes.writeFully(ByteBuffer.wrap(byteArrayOf(1))) }.isFailure)
                     } finally {
                         owner.interrupt()
                         writerScope.cancel()

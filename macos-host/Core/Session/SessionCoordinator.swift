@@ -29,8 +29,7 @@ public actor SessionCoordinator {
     let order: WireOrder
   }
   public typealias StatusHandler = @MainActor @Sendable (HostSnapshot) async -> Void
-  private let adb: ADBClient
-  private let reverses: AdbReverseManager
+  private var route: (any HostConnectionRoute)?
   private var display: VirtualDisplayManager?
   private var metrics = MetricsCollector()
   private var videoTiming: HostVideoTiming?
@@ -43,9 +42,6 @@ public actor SessionCoordinator {
   private let permissions: @MainActor @Sendable () -> Bool
   private var snapshot = HostSnapshot()
   private var preferences = HostPreferences()
-  private var device: ADBDevice?
-  private var controlListener: LoopbackListener?
-  private var videoListener: LoopbackListener?
   private var control: WireConnection?
   private var video: WireConnection?
   private var capture: CapturePipeline?
@@ -71,11 +67,9 @@ public actor SessionCoordinator {
   private var pendingPing: (sequence: UInt64, sent: UInt64)?
 
   public init(
-    adb: ADBClient = ADBClient(), permissions: @escaping @MainActor @Sendable () -> Bool,
+    permissions: @escaping @MainActor @Sendable () -> Bool,
     status: @escaping StatusHandler, logger: SessionLogger = SessionLogger()
   ) {
-    self.adb = adb
-    reverses = AdbReverseManager(adb: adb)
     self.permissions = permissions
     self.status = status
     self.logger = logger
@@ -87,28 +81,6 @@ public actor SessionCoordinator {
     snapshot.message = description
     logger.event(value)
     await status(snapshot)
-  }
-  public func discover() async throws -> [ADBDevice] {
-    let devices = try await adb.listDevices()
-    if snapshot.state == .idle || snapshot.state == .failed {
-      for device in devices { await reverses.retryOwnedCleanup(on: device) }
-    }
-    return devices
-  }
-  public func explicitReverseCleanup(on device: ADBDevice) async throws {
-    guard snapshot.state == .idle || snapshot.state == .failed,
-      try await adb.listDevices().contains(device)
-    else { throw HostFailure.invalidState }
-    try await reverses.explicitCleanup(on: device)
-  }
-  public func installed(on device: ADBDevice) async throws -> InstalledClient? {
-    try await adb.packageVersion(on: device)
-  }
-  public func install(apk: URL, on device: ADBDevice) async throws {
-    guard snapshot.state == .idle || snapshot.state == .failed else {
-      throw HostFailure.invalidState
-    }
-    try await adb.installClient(apk: apk, on: device)
   }
   private static func random(_ length: Int) throws -> Data {
     var bytes = Data(count: length)
@@ -130,22 +102,22 @@ public actor SessionCoordinator {
   private func valid(_ attempt: AttemptIdentity) throws {
     try valid(attempt.incarnation, epoch: attempt.epoch)
   }
-  public func start(device: ADBDevice) async {
-    guard snapshot.state == .idle || snapshot.state == .failed else { return }
+  public func start(route newRoute: any HostConnectionRoute) async {
+    guard !Task.isCancelled, snapshot.state == .idle || snapshot.state == .failed else {
+      await newRoute.close()
+      return
+    }
     lifecycleCompletion = nil
     incarnation &+= 1
     let id = incarnation
-    self.device = device
-    snapshot.device = device.model  // never expose ADB serial in UI or logs
+    route = newRoute  // Join the route before first suspension, including pending ADB work.
+    snapshot.device = newRoute.displayLabel
     await state(.checkingPermissions, "Checking macOS permissions")
     do {
       guard await permissions() else { throw HostFailure.permission }
-      guard try await adb.listDevices().contains(device) else { throw HostFailure.adb }
-      guard let installed = try await adb.packageVersion(on: device), installed.versionCode >= 2
-      else { throw HostFailure.incompatible }
+      let installedLabel = try await newRoute.prepare()
       try valid(id)
-      snapshot.device =
-        "\(device.model) · client \(installed.versionName) (v\(installed.versionCode))"
+      snapshot.device = installedLabel
       try valid(id)
       token = try Self.random(32)
       sessionId = try Self.random(16)
@@ -157,13 +129,10 @@ public actor SessionCoordinator {
       authenticatedControl = false
       await state(.preparingTransport, "Binding 127.0.0.1 and creating owned ADB reverse mappings")
       try valid(id)
-      controlListener = try LoopbackListener(port: 5561, noDelay: true)
-      videoListener = try LoopbackListener(port: 5560, video: true)
-      try await reverses.install(on: device)
-      try valid(id)
       await state(.waitingForClient, "Launching client and waiting for authenticated hello")
       try valid(id)
-      try await adb.launchClient(device: device, token: token, epoch: epoch)
+      try await newRoute.bootstrap(
+        AttemptCredentials(token: token, sessionId: sessionId, epoch: epoch))
       try valid(id)
       try await handshake(id: id)
     } catch {
@@ -173,7 +142,7 @@ public actor SessionCoordinator {
     }
   }
   private func handshake(id: UInt64) async throws {
-    guard let controlListener, let videoListener else { throw HostFailure.transport }
+    guard let route else { throw HostFailure.transport }
     let attempt = AttemptIdentity(incarnation: id, epoch: epoch)
     // Closing the listener and sockets wakes blocked continuations on handshake timeout.
     let budget =
@@ -182,14 +151,15 @@ public actor SessionCoordinator {
       } ?? .seconds(10)
     let timeout = Task { [weak self] in
       try? await Task.sleep(for: budget)
-      if !Task.isCancelled { await self?.expireHandshake(attempt) }
+      if !Task.isCancelled {
+        await self?.expireHandshake(incarnation: attempt.incarnation, epoch: attempt.epoch)
+      }
     }
     defer { timeout.cancel() }
-    let authenticated = try await acceptAuthenticatedControl(
-      controlListener, attempt: attempt)
+    let authenticated = try await acceptAuthenticatedControl(route, attempt: attempt)
     let (config, active) = try await prepareExactDisplay(authenticated.greeting, attempt: attempt)
     let barrier = try await awaitClientBarrier(
-      channel: authenticated.channel, listener: videoListener, order: authenticated.order,
+      channel: authenticated.channel, route: route, order: authenticated.order,
       config: config,
       attempt: attempt)
     try await beginStreaming(
@@ -197,12 +167,27 @@ public actor SessionCoordinator {
       config: config, active: active, attempt: attempt)
   }
 
+  /// Claim a delivered channel only while the accepting attempt still owns this coordinator.
+  /// Both channels use the same lease check immediately before publication.
+  func acceptChannel(
+    from route: any HostConnectionRoute, incarnation id: UInt64, epoch expectedEpoch: UInt32,
+    videoChannel: Bool
+  ) async throws -> WireConnection {
+    let bytes = try await (videoChannel ? route.acceptVideo() : route.acceptControl())
+    let channel = WireConnection(bytes, video: videoChannel)
+    do { try valid(AttemptIdentity(incarnation: id, epoch: expectedEpoch)) } catch {
+      await channel.close()
+      throw error
+    }
+    if videoChannel { video = channel } else { control = channel }
+    return channel
+  }
+
   private func acceptAuthenticatedControl(
-    _ listener: LoopbackListener, attempt: AttemptIdentity
+    _ route: any HostConnectionRoute, attempt: AttemptIdentity
   ) async throws -> AuthenticatedControl {
-    let channel = try await listener.accept()
-    try valid(attempt)
-    control = channel
+    let channel = try await acceptChannel(
+      from: route, incarnation: attempt.incarnation, epoch: attempt.epoch, videoChannel: false)
     guard case .message(let hello) = try await channel.read(),
       hello.type == MessageKind.clientHello.rawValue
     else {
@@ -258,7 +243,7 @@ public actor SessionCoordinator {
   }
 
   private func awaitClientBarrier(
-    channel: WireConnection, listener: LoopbackListener, order initialOrder: WireOrder,
+    channel: WireConnection, route: any HostConnectionRoute, order initialOrder: WireOrder,
     config: NegotiatedConfig, attempt: AttemptIdentity
   ) async throws -> VideoBarrier {
     var order = initialOrder
@@ -266,9 +251,8 @@ public actor SessionCoordinator {
     try valid(attempt)
     try await channel.send(
       HostCommand.configuration(config).wire(sessionId: sessionId, epoch: epoch))
-    let videoChannel = try await listener.accept()
-    try valid(attempt)
-    video = videoChannel
+    let videoChannel = try await acceptChannel(
+      from: route, incarnation: attempt.incarnation, epoch: attempt.epoch, videoChannel: true)
     guard case .message(let videoHello) = try await videoChannel.read(),
       videoHello.type == MessageKind.videoHello.rawValue
     else {
@@ -314,10 +298,12 @@ public actor SessionCoordinator {
     timingReportLockMaxNs = 0
     timingReportFormatMaxNs = 0
     timingReportLogMaxNs = 0
+    let sink = MirriVideoSink(
+      channel: barrier.channel, sessionId: sessionId, epoch: channelEpoch,
+      generation: nextGeneration, config: config)
     let pipeline = CapturePipeline(
-      display: active, socket: barrier.channel,
-      id: sessionId, epoch: epoch, generation: generation, config: config,
-      timing: stageTiming,
+      settings: EncodingSettings(codec: config.codec, bitrate: config.bitrate),
+      sink: sink, timing: stageTiming,
       onFailure: { [weak self] cause in
         Task {
           await self?.failTransport(
@@ -362,18 +348,16 @@ public actor SessionCoordinator {
       await self?.readControl(channel, order: barrier.order, id: id, channelEpoch: channelEpoch)
     }
   }
-  private func expireHandshake(_ attempt: AttemptIdentity) {
-    guard incarnation == attempt.incarnation, epoch == attempt.epoch, snapshot.state != .streaming,
+  func expireHandshake(incarnation id: UInt64, epoch expectedEpoch: UInt32) async {
+    guard incarnation == id, epoch == expectedEpoch, snapshot.state != .streaming,
       snapshot.state != .stopping
     else { return }
-    controlListener?.close()
-    videoListener?.close()
+    let oldRoute = route
     let oldControl = control
     let oldVideo = video
-    Task {
-      await oldControl?.close()
-      await oldVideo?.close()
-    }
+    await oldRoute?.interrupt()
+    await oldControl?.close()
+    await oldVideo?.close()
   }
   private func updateMetrics(id: UInt64, channelEpoch: UInt32) async {
     guard incarnation == id, epoch == channelEpoch, snapshot.state == .streaming else { return }
@@ -535,8 +519,6 @@ public actor SessionCoordinator {
     guard incarnation == id, epoch == channelEpoch,
       snapshot.state == .waitingForReconnect
     else { return }
-    controlListener?.releaseSlot()
-    videoListener?.releaseSlot()
     await state(.waitingForReconnect, "Connection lost; retaining display for bounded grace")
     guard incarnation == id, epoch == channelEpoch,
       snapshot.state == .waitingForReconnect
@@ -551,13 +533,11 @@ public actor SessionCoordinator {
       epoch += 1
       let retryEpoch = epoch
       do {
-        if let device {
-          // ADB can discard reverse mappings across USB reconnection. Reclaim
-          // only this live process's mappings before launching the new epoch.
-          try await reverses.install(on: device)
-          try valid(id, epoch: retryEpoch)
-          try await adb.launchClient(device: device, token: token, epoch: epoch)
-        }
+        guard let route else { throw HostFailure.transport }
+        try await route.retry()
+        try valid(id, epoch: retryEpoch)
+        try await route.bootstrap(
+          AttemptCredentials(token: token, sessionId: sessionId, epoch: retryEpoch))
         try valid(id, epoch: retryEpoch)
         try await handshake(id: id)
         return
@@ -588,10 +568,7 @@ public actor SessionCoordinator {
         let oldVideo = video
         video = nil
         authenticatedControl = false
-        controlListener?.close()
-        controlListener = nil
-        videoListener?.close()
-        videoListener = nil
+        let oldRoute = route
         let teardown = Task {
           await oldCapture?.stop()
           if let oldTiming { logger.metrics(oldTiming.finish()) }
@@ -599,12 +576,11 @@ public actor SessionCoordinator {
           await oldVideo?.close()
         }
         teardownTask = teardown
+        await oldRoute?.interrupt()
         await teardown.value
         guard incarnation == id, epoch == retryEpoch,
           snapshot.state != .stopping
         else { return }
-        controlListener = try? LoopbackListener(port: 5561, noDelay: true)
-        videoListener = try? LoopbackListener(port: 5560, video: true)
         if incarnation == id {
           await state(.waitingForReconnect, "Retrying within display grace period")
         }
@@ -727,14 +703,10 @@ public actor SessionCoordinator {
     let oldControl = control
     control = nil
     authenticatedControl = false
-    controlListener?.close()
-    controlListener = nil
-    videoListener?.close()
-    videoListener = nil
+    let oldRoute = route
+    route = nil
     let oldDisplay = display
     display = nil
-    let oldDevice = device
-    device = nil
     let pendingTeardown = teardownTask
     teardownTask = nil
     token.removeAll()
@@ -746,7 +718,7 @@ public actor SessionCoordinator {
     await oldVideo?.close()
     await oldControl?.close()
     await oldDisplay?.destroy()
-    if let oldDevice { await reverses.remove(on: oldDevice) }
+    await oldRoute?.close()
     snapshot.virtualMode = "Not active (requested 2456x1600 @ 60 Hz)"
     snapshot.clientMode = "Not reported (required 1600x2456 @ 60 Hz)"
   }

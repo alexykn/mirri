@@ -3,7 +3,6 @@ package dev.mirri.client.video
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
-import dev.mirri.client.protocol.VideoCodecId
 
 data class DecoderChoice(
     val name: String,
@@ -21,7 +20,7 @@ data class DecoderChoice(
 
 object CodecCapabilityProbe {
     private data class Profile(
-        val codec: VideoCodecId,
+        val codec: MediaCodecKind,
         val mime: String,
         val androidProfile: Int,
         val androidLevel: Int,
@@ -31,14 +30,14 @@ object CodecCapabilityProbe {
     private val required =
         listOf(
             Profile(
-                VideoCodecId.AVC,
+                MediaCodecKind.AVC,
                 MediaFormat.MIMETYPE_VIDEO_AVC,
                 MediaCodecInfo.CodecProfileLevel.AVCProfileHigh,
                 MediaCodecInfo.CodecProfileLevel.AVCLevel51,
                 51,
             ),
             Profile(
-                VideoCodecId.HEVC,
+                MediaCodecKind.HEVC,
                 MediaFormat.MIMETYPE_VIDEO_HEVC,
                 MediaCodecInfo.CodecProfileLevel.HEVCProfileMain,
                 MediaCodecInfo.CodecProfileLevel.HEVCMainTierLevel51,
@@ -67,8 +66,8 @@ object CodecCapabilityProbe {
         if (caps.profileLevels.none { it.profile == profile.androidProfile && it.level >= profile.androidLevel }) return null
         return DecoderChoice(
             info.name,
-            profile.codec.wire,
-            profile.codec.wire,
+            profile.codec.id,
+            profile.codec.id,
             profile.wireLevel,
             caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency),
         )

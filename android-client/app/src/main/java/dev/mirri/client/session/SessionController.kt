@@ -6,26 +6,26 @@ import android.view.Surface
 import dev.mirri.client.display.DisplaySurfaceController
 import dev.mirri.client.model.DeviceCapabilitiesCollector
 import dev.mirri.client.protocol.ClientCommand
+import dev.mirri.client.protocol.ControlChannel
 import dev.mirri.client.protocol.HostEvent
 import dev.mirri.client.protocol.InputEvent
 import dev.mirri.client.protocol.MessageType
 import dev.mirri.client.protocol.PhysicalMode
 import dev.mirri.client.protocol.SessionConfiguration
 import dev.mirri.client.protocol.SessionMessages
+import dev.mirri.client.protocol.VideoChannel
+import dev.mirri.client.protocol.VideoReceiver
 import dev.mirri.client.protocol.WireException
 import dev.mirri.client.protocol.WireMessage
 import dev.mirri.client.protocol.WireOrder
-import dev.mirri.client.transport.ControlChannel
-import dev.mirri.client.transport.VideoChannel
-import dev.mirri.client.transport.blockingSocket
-import dev.mirri.client.transport.connect
-import dev.mirri.client.transport.openVideo
+import dev.mirri.client.protocol.openVideo
+import dev.mirri.client.transport.blockingBytes
 import dev.mirri.client.video.CodecCapabilityProbe
 import dev.mirri.client.video.DecoderChoice
 import dev.mirri.client.video.DecoderController
+import dev.mirri.client.video.DecoderFailure
 import dev.mirri.client.video.EncodedBufferPool
 import dev.mirri.client.video.TimingLogMessage
-import dev.mirri.client.video.VideoReceiver
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,13 +45,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
-
-data class ClientLaunch(
-    val token: ByteArray,
-    val epoch: UInt,
-    val controlPort: Int,
-    val videoPort: Int,
-)
 
 enum class ClientSessionState {
     IDLE,
@@ -236,7 +229,7 @@ class SessionController(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            if (e is WireException && e.message !in setOf("connection closed", "decoder failed")) {
+            if ((e is WireException && e.message !in setOf("connection closed", "decoder failed")) || e is DecoderFailure) {
                 state(ClientSessionState.FAILED, e.message ?: "Protocol rejected")
                 AttemptResult.TERMINAL
             } else {
@@ -293,11 +286,11 @@ class SessionController(
         state(ClientSessionState.CONNECTING_CONTROL, "Connecting USB control")
         // The raw socket joins this attempt *before* blocking connect or a
         // cancellable IO -> Main handoff; finally closes it even if delivery fails.
-        val socket = connect(spec.controlPort, owner.sockets)
+        val bytes = spec.connector.connect(spec.endpoint.controlPort, owner.connections)
         val channel =
-            ControlChannel(socket, scope) {
+            ControlChannel(bytes, scope) {
                 owner.failure.trySend(it)
-                socket.close()
+                bytes.close()
             }
         owner.control = channel
         // Only the host can advance epochs, via a new launch intent; retries before that reuse this epoch.
@@ -308,7 +301,7 @@ class SessionController(
         val hello = withContext(Dispatchers.Main) { DeviceCapabilitiesCollector.collect(activity, epoch, spec.token) }
         channel.sendAndWait(MessageType.CLIENT_HELLO.id, SessionMessages.clientHelloFields(hello))
         val first =
-            blockingSocket(channel::close) { channel.read(WireOrder(WireOrder.Peer.HOST, WireOrder.Channel.CONTROL, epoch.toULong())) }
+            blockingBytes(channel::close) { channel.read(WireOrder(WireOrder.Peer.HOST, WireOrder.Channel.CONTROL, epoch.toULong())) }
         val config =
             (SessionMessages.fromHost(first) as? HostEvent.Configure)?.config
                 ?: throw WireException("expected SessionConfig")
@@ -419,14 +412,14 @@ class SessionController(
         val id = config.id
         val epoch = config.epoch
         state(ClientSessionState.CONNECTING_VIDEO, "Authenticating video channel")
-        val v = openVideo(spec.videoPort, owner.sockets, epoch, id, spec.token)
+        val v = openVideo(spec.connector, spec.endpoint.videoPort, owner.connections, epoch, id, spec.token)
         owner.video = v
         owner.throwIfFailed()
         sendAndWait(channel, id, epoch, ClientCommand.Ready(selected, choice.name))
         val order = WireOrder(WireOrder.Peer.HOST, WireOrder.Channel.CONTROL, epoch.toULong(), id)
         // SessionConfig was read with a first-message order checker; subsequent reads must advance it.
         order.accept(prepared.first)
-        val start = blockingSocket(channel::close) { channel.read(order) }
+        val start = blockingBytes(channel::close) { channel.read(order) }
         val started =
             SessionMessages.fromHost(start) as? HostEvent.Start
                 ?: throw WireException("expected StartStream")
@@ -479,7 +472,7 @@ class SessionController(
             val metricJob = launchMetrics(owner, d, channel, id, epoch, selected)
             try {
                 while (true) {
-                    val message = blockingSocket(channel::close) { channel.read(order) }
+                    val message = blockingBytes(channel::close) { channel.read(order) }
                     if (handleHostEvent(SessionMessages.fromHost(message), channel, id, epoch, owner)) return@coroutineScope
                 }
             } catch (e: CancellationException) {

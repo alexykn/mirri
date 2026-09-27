@@ -20,7 +20,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import dev.mirri.client.input.TouchInterpreter
-import dev.mirri.client.session.ClientLaunch
+import dev.mirri.client.session.ClientLaunchBoundary
 import dev.mirri.client.session.ClientSessionState
 import dev.mirri.client.session.SessionController
 import kotlinx.coroutines.launch
@@ -126,18 +126,13 @@ class MainActivity : ComponentActivity() {
                 addView(status, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START))
             }
         setContentView(view)
-        val token = intent.getStringExtra("mirri_token")
-        val epoch = intent.getIntExtra("mirri_epoch", 0)
-        val control = intent.getIntExtra("mirri_control_port", 0)
-        val video = intent.getIntExtra("mirri_video_port", 0)
-        if (!validLaunch(token, epoch, control, video)) {
+        val launch = ClientLaunchBoundary.decode(intent)
+        if (launch == null) {
             Log.w("MirriLifecycle", "launch rejected (invalid extras)")
             status.setText(R.string.launch_from_host)
         } else {
             Log.i("MirriLifecycle", "launch accepted surfacePending=true")
-            val acceptedToken = requireNotNull(token)
-            val bytes = ByteArray(32) { acceptedToken.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
-            controller.start(ClientLaunch(bytes, epoch.toUInt(), control, video))
+            controller.start(launch)
         }
     }
 
@@ -146,17 +141,6 @@ class MainActivity : ComponentActivity() {
         Log.i("MirriLifecycle", "new host launch intent; recreating owned activity")
         setIntent(intent)
         recreate()
-    }
-
-    private fun validLaunch(
-        token: String?,
-        epoch: Int,
-        control: Int,
-        video: Int,
-    ): Boolean {
-        val validIdentity = token != null && token.matches(Regex("[0-9a-f]{64}")) && epoch > 0
-        val validTransport = control == 5561 && video == 5560
-        return validIdentity && validTransport && intent.getIntExtra("mirri_protocol_major", 0) == 1
     }
 
     override fun onKeyDown(

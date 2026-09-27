@@ -49,71 +49,53 @@ public final class PipelineFailureGate: @unchecked Sendable {
   }
 }
 
-/// Callback order is preserved in the FIFO. A slot is held from capture admission until send completion.
+/// Completion means downstream has finished using this unit and its bounded write has completed.
+public protocol EncodedVideoSink: Sendable {
+  func write(_ unit: EncodedUnit, ordinal: UInt64) async throws
+}
+
+/// Callback order is preserved in the FIFO. Credits are held through sink completion.
 public final class VideoSender: @unchecked Sendable {
   private let lock = NSLock()
   private var queue: [EncodedUnit] = []
   private var pumping = false
+  private var pumpTask: Task<Void, Never>?
   private var stopped = false
   private var sequence: UInt64 = 0
-  private var configured = false
   private let gate: VideoAdmission
-  private let socket: WireConnection
-  private let sessionId: Data
-  private let epoch: UInt32
-  private let generation: UInt32
-  private let config: NegotiatedConfig
+  private let sink: any EncodedVideoSink
   public var onFailure: (@Sendable () -> Void)?
   public var onSent: (@Sendable (Int, Double?, Double?) -> Void)?
   public var onTimelineSent: (@Sendable (EncodedUnit, UInt64, UInt64) -> Void)?
   public var onQueuedDepth: (@Sendable (Int) -> Void)?
   public var onRelease: (@Sendable (Data) -> Void)?
-  public init(
-    socket: WireConnection, id: Data, epoch: UInt32, generation: UInt32,
-    config: NegotiatedConfig, gate: VideoAdmission
-  ) {
-    self.socket = socket
-    sessionId = id
-    self.epoch = epoch
-    self.generation = generation
-    self.config = config
+  public init(sink: any EncodedVideoSink, gate: VideoAdmission) {
+    self.sink = sink
     self.gate = gate
   }
   public func enqueue(_ unit: EncodedUnit) {
     lock.lock()
     if stopped {
       lock.unlock()
+      onRelease?(unit.accessUnit)
       gate.release()
       return
     }
     queue.append(unit)
     let depth = queue.count
-    let start = !pumping
-    if start { pumping = true }
+    if !pumping {
+      pumping = true
+      pumpTask = Task { await self.pump() }
+    }
     lock.unlock()
     onQueuedDepth?(depth)
-    if start { Task { await pump() } }
   }
   private func pump() async {
     while true {
       guard let unit = next() else { return }
       do {
-        if !configured {
-          guard unit.keyframe, let sets = unit.parameterSets else {
-            throw HostFailure.hardwareCodec
-          }
-          try await socket.send(
-            HostCommand.codecConfiguration(generation: generation, config: config, sets: sets)
-              .wire(sessionId: sessionId, epoch: epoch))
-          configured = true
-        }
         let sentSequence = sequence
-        let flags: UInt64 = unit.keyframe ? (sentSequence == 0 ? 3 : 1) : 0
-        try await socket.send(
-          HostCommand.frame(
-            generation: generation, sequence: sentSequence, pts: unit.pts, flags: flags,
-            data: unit.accessUnit
-          ).wire(sessionId: sessionId, epoch: epoch))
+        try await sink.write(unit, ordinal: sentSequence)
         sequence += 1
         let writtenNs = DispatchTime.now().uptimeNanoseconds
         onSent?(
@@ -124,9 +106,10 @@ public final class VideoSender: @unchecked Sendable {
         onRelease?(unit.accessUnit)
         gate.release()
       } catch {
+        onRelease?(unit.accessUnit)
         gate.release()
         onFailure?()
-        stop()
+        _ = stopQueue()
         return
       }
     }
@@ -136,17 +119,27 @@ public final class VideoSender: @unchecked Sendable {
     defer { lock.unlock() }
     guard !queue.isEmpty, !stopped else {
       pumping = false
+      pumpTask = nil
       return nil
     }
     return queue.removeFirst()
   }
-  public func stop() {
+  private func stopQueue() -> Task<Void, Never>? {
     lock.lock()
     stopped = true
-    let removed = queue.count
+    let removed = queue
     queue.removeAll()
+    let task = pumpTask
     lock.unlock()
-    for _ in 0..<removed { gate.release() }
+    for unit in removed {
+      onRelease?(unit.accessUnit)
+      gate.release()
+    }
+    return task
+  }
+  public func stop() async {
+    let task = stopQueue()
+    await task?.value
   }
 }
 
@@ -285,8 +278,7 @@ public final class CapturePipeline: @unchecked Sendable {
   private let sender: VideoSender
   private let gate = VideoAdmission()
   public init(
-    display: ActiveDisplay, socket: WireConnection, id: Data, epoch: UInt32,
-    generation: UInt32, config: NegotiatedConfig, timing: HostVideoTiming,
+    settings: EncodingSettings, sink: any EncodedVideoSink, timing: HostVideoTiming,
     onFailure: @escaping @Sendable (PipelineFailureCause) -> Void,
     onReceived: @escaping @Sendable () -> Void,
     onCompleteCadence: @escaping @Sendable (Double?) -> Void,
@@ -297,10 +289,8 @@ public final class CapturePipeline: @unchecked Sendable {
     onEncoded: @escaping @Sendable (Int, Double) -> Void,
     onSent: @escaping @Sendable (Int, Double?, Double?) -> Void
   ) {
-    encoder = VideoEncoder(codec: config.codec, bitrate: config.bitrate)
-    sender = VideoSender(
-      socket: socket, id: id, epoch: epoch, generation: generation,
-      config: config, gate: gate)
+    encoder = VideoEncoder(codec: settings.codec, bitrate: settings.bitrate)
+    sender = VideoSender(sink: sink, gate: gate)
     capturer = ScreenCapturer(encoder: encoder, gate: gate)
     encoder.onUnit = { [sender, timing] unit in
       timing.encoderOutput(unit)
@@ -340,7 +330,7 @@ public final class CapturePipeline: @unchecked Sendable {
   public func stop() async {
     await capturer.stop()
     encoder.invalidate()
-    sender.stop()
+    await sender.stop()
   }
   public var queueDepth: Int { gate.depth }
 }

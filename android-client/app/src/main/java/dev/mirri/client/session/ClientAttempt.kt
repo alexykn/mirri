@@ -1,17 +1,16 @@
 package dev.mirri.client.session
 
-import dev.mirri.client.transport.AttemptSockets
-import dev.mirri.client.transport.ControlChannel
-import dev.mirri.client.transport.VideoChannel
+import dev.mirri.client.protocol.ControlChannel
+import dev.mirri.client.protocol.VideoChannel
 import dev.mirri.client.video.DecoderController
 import dev.mirri.client.video.VideoTimingOwner
 import kotlinx.coroutines.channels.Channel
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-/** One attempt owns even sockets still connecting; old callbacks can touch only this context. */
+/** One attempt owns even byte connections still connecting; old callbacks touch only this context. */
 internal class ClientAttempt {
-    val sockets = AttemptSockets()
+    val connections = AttemptConnections()
     val timing = VideoTimingOwner()
 
     @Volatile var control: ControlChannel? = null
@@ -47,8 +46,8 @@ internal class ClientAttempt {
     fun interrupt() {
         active = false
         streaming = false
-        sockets.close()
-        // The raw sockets are already shut down. Finish both wrappers even if
+        connections.close()
+        // Raw byte connections are already shut down. Finish both wrappers even if
         // one races a concurrent close or a failing writer.
         runCatching { video?.close() }
         runCatching { control?.close() }

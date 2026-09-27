@@ -1,11 +1,8 @@
-package dev.mirri.client.video
+package dev.mirri.client.protocol
 
-import dev.mirri.client.protocol.MessageType
-import dev.mirri.client.protocol.SessionMessages
-import dev.mirri.client.protocol.WireCodec
-import dev.mirri.client.protocol.WireException
-import dev.mirri.client.transport.VideoChannel
-import dev.mirri.client.transport.readFully
+import dev.mirri.client.video.EncodedBufferPool
+import dev.mirri.client.video.EncodedVideoConsumer
+import dev.mirri.client.video.VideoTimingOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
@@ -15,7 +12,7 @@ import java.nio.ByteOrder
 class VideoReceiver(
     private val channel: VideoChannel,
     private val pool: EncodedBufferPool,
-    private val decoder: DecoderController,
+    private val decoder: EncodedVideoConsumer,
     private val sessionId: ByteArray,
     private val epoch: UInt,
     private val codec: Int,
@@ -73,7 +70,7 @@ class VideoReceiver(
         record: Header,
     ) {
         header.clear()
-        channel.socket.readFully(header)
+        channel.readFully(header)
         header.flip()
         if (header.int != 0x4d525249 || header.short.toInt() != 1) throw WireException("video header")
         val minor = header.short.toInt() and 65535
@@ -97,7 +94,7 @@ class VideoReceiver(
         while (remaining > 0) {
             skip.clear()
             skip.limit(minOf(remaining, skip.capacity()))
-            channel.socket.readFully(skip)
+            channel.readFully(skip)
             remaining -= skip.position()
         }
     }
@@ -110,7 +107,7 @@ class VideoReceiver(
         val body = ByteBuffer.allocate(32 + length).order(ByteOrder.BIG_ENDIAN)
         header.rewind()
         body.put(header)
-        channel.socket.readFully(body)
+        channel.readFully(body)
         val message = WireCodec.decode(body.array()) ?: throw WireException("video config")
         val configuration = SessionMessages.fromVideoConfig(message)
         val wrongIdentity = !configuration.id.contentEquals(sessionId) || configuration.epoch != epoch
@@ -129,7 +126,7 @@ class VideoReceiver(
             csd.put(it)
         }
         csd.flip()
-        decoder.submit(csd, 0, true)
+        decoder.submitConfiguration(csd)
         state.configured = true
     }
 
@@ -148,14 +145,14 @@ class VideoReceiver(
         }
         pool.withLease { buffer ->
             buffer.limit(record.auLength)
-            channel.socket.readFully(buffer)
+            channel.readFully(buffer)
             val receivedAtNs = System.nanoTime()
             buffer.flip()
             if (buffer.getInt(0) != 1) throw WireException("Annex-B required")
             received(record.auLength)
             // The validated wire flag remains only numeric join metadata, never decoder admission.
             timing.received(record.generation.toUInt(), record.frame, record.pts, receivedAtNs, record.flags and 1 != 0, record.auLength)
-            decoder.submit(buffer, record.pts, receivedAtNs = receivedAtNs)
+            decoder.submitAccessUnit(buffer, record.pts, receivedAtNs)
             state.frameSequence++
             state.awaitingIdr = false
         }
@@ -168,7 +165,7 @@ class VideoReceiver(
     ) {
         if (length < 50) throw WireException("video frame length")
         prefix.clear()
-        channel.socket.readFully(prefix)
+        channel.readFully(prefix)
         prefix.flip()
         var matchingId = true
         for (i in sessionId.indices) if (prefix.get() != sessionId[i]) matchingId = false

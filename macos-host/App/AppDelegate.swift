@@ -6,8 +6,10 @@ import UniformTypeIdentifiers
   private let menu = StatusMenuController()
   private let permissions = PermissionsController()
   private let settings = HostSettings()
+  private let devices = USBDeviceService()
   private var coordinator: SessionCoordinator!
   private var poll: Task<Void, Never>?
+  private var pendingStart: Task<Void, Never>?
   private var sleepStop: Task<Void, Never>?
   private var selected: ADBDevice?
   private var autoAttemptedSerial: String?
@@ -19,7 +21,7 @@ import UniformTypeIdentifiers
     menu.onStart = { [weak self] in self?.start() }
     menu.onStop = { [weak self] in
       guard let self else { return }
-      Task { await self.coordinator.stop() }
+      Task { await self.stopSession() }
     }
     menu.onReconnect = { [weak self] in
       guard let self else { return }
@@ -61,17 +63,17 @@ import UniformTypeIdentifiers
   private func refreshDevices() async {
     let state = await coordinator.current().state
     guard state == .idle || state == .failed else { return }
-    guard let devices = try? await coordinator.discover() else { return }
-    menu.discovered(devices)
+    guard let discovered = try? await devices.discover() else { return }
+    menu.discovered(discovered)
     if let attempted = autoAttemptedSerial,
-      !devices.contains(where: { $0.serial == attempted })
+      !discovered.contains(where: { $0.serial == attempted })
     {
       autoAttemptedSerial = nil
     }
-    if let selected, !devices.contains(selected) { self.selected = nil }
-    if selected == nil { selected = devices.first }
+    if let selected, !discovered.contains(selected) { self.selected = nil }
+    if selected == nil { selected = discovered.first }
     if let remembered = settings.rememberedSerial,
-      let candidate = devices.first(where: { $0.serial == remembered }),
+      let candidate = discovered.first(where: { $0.serial == remembered }),
       autoAttemptedSerial != candidate.serial,
       (await coordinator.current()).state == .idle
     {
@@ -81,11 +83,36 @@ import UniformTypeIdentifiers
     }
   }
   private func start() {
-    guard let selected else { return }
-    Task {
-      await coordinator.configure(settings.preferences())
-      await coordinator.start(device: selected)
+    guard let selected, pendingStart == nil else { return }
+    pendingStart = Task { [weak self] in
+      guard let self else { return }
+      defer { pendingStart = nil }
+      do {
+        let route = try await devices.route(on: selected)
+        if Task.isCancelled {
+          await route.close()
+          return
+        }
+        await coordinator.configure(settings.preferences())
+        if Task.isCancelled {
+          await route.close()
+          return
+        }
+        await coordinator.start(route: route)
+      } catch {
+        if !Task.isCancelled { NSApplication.shared.presentError(error) }
+      }
     }
+  }
+  private func stopSession() async {
+    let starting = pendingStart
+    starting?.cancel()
+    await coordinator.stop()
+    await starting?.value
+  }
+  private func idleForDeviceOperation() async -> Bool {
+    let state = await coordinator.current().state
+    return state == .idle || state == .failed
   }
   private func install() {
     guard let selected else { return }
@@ -95,7 +122,10 @@ import UniformTypeIdentifiers
     panel.canChooseDirectories = false
     guard panel.runModal() == .OK, let apk = panel.url else { return }
     Task {
-      do { try await coordinator.install(apk: apk, on: selected) } catch {
+      do {
+        guard await idleForDeviceOperation() else { throw HostFailure.invalidState }
+        try await devices.install(apk: apk, on: selected)
+      } catch {
         NSApplication.shared.presentError(error)
       }
     }
@@ -111,19 +141,22 @@ import UniformTypeIdentifiers
     prompt.addButton(withTitle: "Cancel")
     guard prompt.runModal() == .alertFirstButtonReturn else { return }
     Task {
-      do { try await coordinator.explicitReverseCleanup(on: selected) } catch {
+      do {
+        guard await idleForDeviceOperation() else { throw HostFailure.invalidState }
+        try await devices.explicitReverseCleanup(on: selected)
+      } catch {
         NSApplication.shared.presentError(error)
       }
     }
   }
   @objc private func sleep() {
-    sleepStop = Task { await coordinator.stop() }
+    sleepStop = Task { await stopSession() }
   }
   @objc private func wake() {
     Task {
       await sleepStop?.value
       sleepStop = nil
-      await coordinator.stop()
+      await stopSession()
       autoAttemptedSerial = nil
       await refreshDevices()
     }
@@ -131,7 +164,7 @@ import UniformTypeIdentifiers
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     poll?.cancel()
     Task {
-      await coordinator.stop()
+      await stopSession()
       NSApplication.shared.reply(toApplicationShouldTerminate: true)
     }
     return .terminateLater

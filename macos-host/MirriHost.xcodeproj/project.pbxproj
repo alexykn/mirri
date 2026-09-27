@@ -10,32 +10,36 @@
 		021F8FC736B6F45D44A3D749 /* HostModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4B14024A5C9E7F596B009DC /* HostModel.swift */; };
 		0A0035556FB5E3DB2FAD6688 /* SessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B5E4098A920EDDB852D1AFA /* SessionCoordinator.swift */; };
 		0BD29EF89A3F9C6166940F86 /* WireFramer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84009A7B016920E9C5CA0158 /* WireFramer.swift */; };
+		0D04322B0936144C609DE0C7 /* MirriConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CC2822FD4FEE7EBFD0D06A9 /* MirriConnection.swift */; };
 		157957D9AECF076A80FBF7B3 /* SessionMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7B5E9D398D4472B1EAAE58 /* SessionMessages.swift */; };
 		15EDE647F321E60AD1112162 /* VirtualDisplayManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9228809E89D767F5DEF515E /* VirtualDisplayManager.swift */; };
 		2AE5F16C673ABE40C17A94AC /* WireTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6D447EC6570D2CD2DFB193 /* WireTests.swift */; };
 		338A13B9836FCFA892C2638C /* HostRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FC1EDB151F3C1C781DA772B /* HostRuntimeTests.swift */; };
 		3DFAE1A91AF7F19E67B1BE47 /* InputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC1763145C3CE98EC9E4855E /* InputController.swift */; };
 		4662BAD1B34DA1E6344E836B /* libVirtualDisplayShim.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 03826BFD20C4C4C8B5618CC0 /* libVirtualDisplayShim.a */; };
+		46C2D151D6CA0AC1669F963E /* USBDeviceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E746037D453B67119949E070 /* USBDeviceService.swift */; };
 		507D14D9396FB495BA1D2EF0 /* HostSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 305AC4E89EF2305E3AE4189B /* HostSettings.swift */; };
 		57A559F1C58D85FDFB43841F /* MirriHostCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */; };
 		632349E7E64356F791202909 /* VideoEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E8ACB066CCF4D7A0E4E5488 /* VideoEncoder.swift */; };
 		63E69C6D8C1257A8876676FC /* LoopbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98F3A8469F39E9B0DA6D4764 /* LoopbackTests.swift */; };
 		72C5702F05E63FAD9E63DB5E /* PermissionsController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13AE55467BA9AED12E857403 /* PermissionsController.swift */; };
 		77AD43AE0DE34B80D85A50AF /* HostObservability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CB0B038D27F46F89C643CCC /* HostObservability.swift */; };
-		7B43CA895023967CFCB49146 /* LoopbackTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ABA3D82C72018E6E1D43F1B /* LoopbackTransport.swift */; };
 		854F609E959DDE1F1512077D /* ADBClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 496773F688E3BDCCF86EEF2A /* ADBClient.swift */; };
 		8D3B0978D5D0D622B6A979E5 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F7C7B0FBED272C8232917B0 /* main.swift */; };
 		8E27B7ED5C555CE65924804C /* module.modulemap in CopyFiles */ = {isa = PBXBuildFile; fileRef = 39E157F6424EA58533D321BC /* module.modulemap */; };
 		96EE3121381807470DF2A025 /* libVirtualDisplayShim.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 03826BFD20C4C4C8B5618CC0 /* libVirtualDisplayShim.a */; };
 		971CD182AC129CDFDA9D8FFC /* MirriHostCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		9727D746B5E17EFE1E05409E /* HostVideoTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAD85EA6CC8D64788F5EC5B5 /* HostVideoTiming.swift */; };
+		99698F81F1DE22BD41471CDB /* MirriVideoSink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E3C333B169206CEA1B523C3 /* MirriVideoSink.swift */; };
 		9989E5604F0BF4956CDF4032 /* Wire.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF05CB253AA710C5E2252AA8 /* Wire.swift */; };
 		9E6830EE6EA5BE5C4AEE4B05 /* VirtualDisplayController.m in Sources */ = {isa = PBXBuildFile; fileRef = BB4F8CC3234AECEB3296F00B /* VirtualDisplayController.m */; };
 		A490338D443C2426CA88E4EB /* CapturePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8C0FA2738ABBFB96C5CA242 /* CapturePipeline.swift */; };
 		A9A24E7254C9F20A19A0BA05 /* StatusMenuController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA615D89D047A32CF31FD64A /* StatusMenuController.swift */; };
+		B63F84A8454244F3E9A16EFC /* ConnectionRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABE5CB33B1DE92902BBEF4E7 /* ConnectionRoute.swift */; };
 		B7FA6CA9E2FF297BA50688DF /* MirriHostCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C21E67024920AD0FB716C282 /* MirriHostCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */; };
 		C8E6E6A1A8F9199F7B572439 /* VirtualDisplayController.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = F65DF3C2CFD1DA3A78B4D130 /* VirtualDisplayController.h */; };
+		CF230428D102AC1F53A38441 /* ByteTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9679DA41638D8919213B25D /* ByteTransport.swift */; };
 		D8E4BD61324C39406059B06A /* WireOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77D8D2AC3BF6607F16396B63 /* WireOrder.swift */; };
 		EABF9B66867668DAEFBC5172 /* SessionNegotiator.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF63E3A6FBD493B83E96A86E /* SessionNegotiator.swift */; };
 		F1926F6E6D9CBC1D6A27F81F /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29D62F2DFF19F53D2EFC3B55 /* AppDelegate.swift */; };
@@ -114,8 +118,9 @@
 		29D62F2DFF19F53D2EFC3B55 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		305AC4E89EF2305E3AE4189B /* HostSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSettings.swift; sourceTree = "<group>"; };
 		39E157F6424EA58533D321BC /* module.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = module.modulemap; sourceTree = "<group>"; };
+		3E3C333B169206CEA1B523C3 /* MirriVideoSink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirriVideoSink.swift; sourceTree = "<group>"; };
 		496773F688E3BDCCF86EEF2A /* ADBClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ADBClient.swift; sourceTree = "<group>"; };
-		5ABA3D82C72018E6E1D43F1B /* LoopbackTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackTransport.swift; sourceTree = "<group>"; };
+		5CC2822FD4FEE7EBFD0D06A9 /* MirriConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirriConnection.swift; sourceTree = "<group>"; };
 		5E8ACB066CCF4D7A0E4E5488 /* VideoEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoEncoder.swift; sourceTree = "<group>"; };
 		5FB7078B07492E6C93ECE7B1 /* MirriHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MirriHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6FC1EDB151F3C1C781DA772B /* HostRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostRuntimeTests.swift; sourceTree = "<group>"; };
@@ -127,11 +132,14 @@
 		98F3A8469F39E9B0DA6D4764 /* LoopbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackTests.swift; sourceTree = "<group>"; };
 		9F7C7B0FBED272C8232917B0 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		AA615D89D047A32CF31FD64A /* StatusMenuController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusMenuController.swift; sourceTree = "<group>"; };
+		ABE5CB33B1DE92902BBEF4E7 /* ConnectionRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionRoute.swift; sourceTree = "<group>"; };
 		BA7B5E9D398D4472B1EAAE58 /* SessionMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionMessages.swift; sourceTree = "<group>"; };
 		BB4F8CC3234AECEB3296F00B /* VirtualDisplayController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = VirtualDisplayController.m; sourceTree = "<group>"; };
 		CF05CB253AA710C5E2252AA8 /* Wire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wire.swift; sourceTree = "<group>"; };
 		CFDB2F836196D6AF6E39FEED /* MirriHostTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MirriHostTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D4B14024A5C9E7F596B009DC /* HostModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostModel.swift; sourceTree = "<group>"; };
+		E746037D453B67119949E070 /* USBDeviceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBDeviceService.swift; sourceTree = "<group>"; };
+		E9679DA41638D8919213B25D /* ByteTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteTransport.swift; sourceTree = "<group>"; };
 		EC1763145C3CE98EC9E4855E /* InputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputController.swift; sourceTree = "<group>"; };
 		EC6D447EC6570D2CD2DFB193 /* WireTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireTests.swift; sourceTree = "<group>"; };
 		EF63E3A6FBD493B83E96A86E /* SessionNegotiator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionNegotiator.swift; sourceTree = "<group>"; };
@@ -201,6 +209,7 @@
 			isa = PBXGroup;
 			children = (
 				496773F688E3BDCCF86EEF2A /* ADBClient.swift */,
+				E746037D453B67119949E070 /* USBDeviceService.swift */,
 			);
 			path = Device;
 			sourceTree = "<group>";
@@ -226,6 +235,8 @@
 		64102E16FCE61A245DEAF65D /* Model */ = {
 			isa = PBXGroup;
 			children = (
+				5CC2822FD4FEE7EBFD0D06A9 /* MirriConnection.swift */,
+				3E3C333B169206CEA1B523C3 /* MirriVideoSink.swift */,
 				BA7B5E9D398D4472B1EAAE58 /* SessionMessages.swift */,
 				CF05CB253AA710C5E2252AA8 /* Wire.swift */,
 				84009A7B016920E9C5CA0158 /* WireFramer.swift */,
@@ -317,7 +328,8 @@
 		CB79494CD4DBD48C0461178E /* Transport */ = {
 			isa = PBXGroup;
 			children = (
-				5ABA3D82C72018E6E1D43F1B /* LoopbackTransport.swift */,
+				E9679DA41638D8919213B25D /* ByteTransport.swift */,
+				ABE5CB33B1DE92902BBEF4E7 /* ConnectionRoute.swift */,
 			);
 			path = Transport;
 			sourceTree = "<group>";
@@ -484,15 +496,19 @@
 			buildActionMask = 2147483647;
 			files = (
 				854F609E959DDE1F1512077D /* ADBClient.swift in Sources */,
+				CF230428D102AC1F53A38441 /* ByteTransport.swift in Sources */,
 				A490338D443C2426CA88E4EB /* CapturePipeline.swift in Sources */,
+				B63F84A8454244F3E9A16EFC /* ConnectionRoute.swift in Sources */,
 				021F8FC736B6F45D44A3D749 /* HostModel.swift in Sources */,
 				77AD43AE0DE34B80D85A50AF /* HostObservability.swift in Sources */,
 				9727D746B5E17EFE1E05409E /* HostVideoTiming.swift in Sources */,
 				3DFAE1A91AF7F19E67B1BE47 /* InputController.swift in Sources */,
-				7B43CA895023967CFCB49146 /* LoopbackTransport.swift in Sources */,
+				0D04322B0936144C609DE0C7 /* MirriConnection.swift in Sources */,
+				99698F81F1DE22BD41471CDB /* MirriVideoSink.swift in Sources */,
 				0A0035556FB5E3DB2FAD6688 /* SessionCoordinator.swift in Sources */,
 				157957D9AECF076A80FBF7B3 /* SessionMessages.swift in Sources */,
 				EABF9B66867668DAEFBC5172 /* SessionNegotiator.swift in Sources */,
+				46C2D151D6CA0AC1669F963E /* USBDeviceService.swift in Sources */,
 				632349E7E64356F791202909 /* VideoEncoder.swift in Sources */,
 				15EDE647F321E60AD1112162 /* VirtualDisplayManager.swift in Sources */,
 				9989E5604F0BF4956CDF4032 /* Wire.swift in Sources */,
