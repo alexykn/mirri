@@ -154,7 +154,7 @@ negotiation/connection deadlines and fail explicitly on hardware or signaling er
 This is multi-seam work: wire contract, macOS media, Android media, then integration.
 The working tree contains substantial existing uncommitted work. Preserve it;
 do not stash, reset or commit it to manufacture worktree isolation. Run component
-writers **sequentially** in `/Users/alxknt/github/omarchy-pad/mirri`, with one writer
+writers **sequentially** in the repository root, with one writer
 at a time, fresh contexts and durable handoffs. Parent performs final acceptance.
 
 | Lane | Exclusive responsibility | Gate / handoff |
