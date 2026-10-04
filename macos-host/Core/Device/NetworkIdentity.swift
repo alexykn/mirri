@@ -6,7 +6,7 @@ import SwiftASN1
 import X509
 
 /// A concrete interface/address binding selected by the user, never a wildcard default.
-public struct LocalIPv4Address: Sendable, Equatable {
+public struct LocalIPv4Address: Sendable, Hashable {
   public let interface: String
   public let address: String
   public init(interface: String, address: String) {

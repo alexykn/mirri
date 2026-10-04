@@ -11,7 +11,6 @@ import MirriHostCore
     super.init()
     popover.behavior = .transient  // Outside click and Escape dismiss the panel.
     popover.animates = true
-    popover.contentSize = NSSize(width: 350, height: 475)
     popover.contentViewController = makeConnectionPanel(panel)
     if let button = item.button {
       button.title = "▣ Mirri"
@@ -22,8 +21,12 @@ import MirriHostCore
     }
   }
 
-  func render(_ selection: ConnectionSelection, settings: HostSettings) {
-    panel.render(selection, settings: settings)
+  func render(
+    _ selection: ConnectionSelection, settings: HostSettings, pairedCount: Int,
+    manualAddress: LocalIPv4Address?
+  ) {
+    panel.render(
+      selection, settings: settings, pairedCount: pairedCount, manualAddress: manualAddress)
   }
 
   func showWhenReady() {
@@ -41,17 +44,15 @@ import MirriHostCore
   }
 
   @discardableResult func show() -> Bool {
-    guard let button = item.button, let screen = button.window?.screen
-    else { return false }
+    guard let button = item.button, button.window?.screen != nil else { return false }
     if popover.isShown { return true }
-    let available = screen.visibleFrame.height
-    panel.height = max(320, min(475, available - 72))
-    popover.contentSize = NSSize(width: 350, height: panel.height)
     // Do not activate the accessory app here: activation during `open -n`
     // briefly made it frontmost before the launcher's previous app reclaimed
     // focus, which dismissed the transient popover immediately.
     popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     popover.contentViewController?.view.window?.makeKey()
+    // Like a system menu: keyboard focus starts nowhere rather than ringing the first button.
+    popover.contentViewController?.view.window?.makeFirstResponder(nil)
     return popover.isShown
   }
 

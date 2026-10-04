@@ -13,6 +13,9 @@ import UniformTypeIdentifiers
   private var presences: [Data: RendezvousPresence] = [:]
   private var usbDevices: Result<[ADBDevice], Error> = .success([])
   private var automaticStarts: [Date] = []
+  private var pairedCount = 0
+  /// A Mac address chosen in Settings; nil picks one automatically.
+  private var manualAddress: LocalIPv4Address?
   private var coordinator: SessionCoordinator!
   private var poll: Task<Void, Never>?
   private var pendingStart: Task<Void, Never>?
@@ -60,19 +63,11 @@ import UniformTypeIdentifiers
     if server.start() { control = server }
   }
   private func configureConnectionActions() {
-    menu.panel.onDevice = { [weak self] device in
-      guard let self else { return }
-      selection.select(device)
-      render()
-    }
+    menu.panel.onConnect = { [weak self] device in self?.connect(to: device) }
     menu.panel.onAddress = { [weak self] address in
       guard let self else { return }
-      selection.select(address)
+      manualAddress = address
       render()
-    }
-    menu.panel.onConnect = { [weak self] in
-      // WebRTC over UDP is the default; the TCP/TLS video path stays for comparison.
-      self?.connect(rtc: !ProcessInfo.processInfo.arguments.contains("--tcp-video"))
     }
     menu.panel.onStop = { [weak self] in
       guard let self else { return }
@@ -80,6 +75,20 @@ import UniformTypeIdentifiers
     }
     menu.panel.onRetry = { [weak self] in self?.reconnect() }
     menu.panel.onInstall = { [weak self] in self?.install() }
+    menu.panel.onUnpair = { [weak self] in
+      guard let self, selection.isEditable else { return }
+      Task {
+        try? await self.pairing.removeAll()
+        for presence in Array(self.presences.values) { presence.close() }
+        self.pairedCount = 0
+        self.render()
+      }
+    }
+    menu.panel.onAutoConnect = { [weak self] in
+      guard let self else { return }
+      settings.autoConnect = $0
+      render()
+    }
   }
   private func configureSettingsActions() {
     menu.panel.onCodec = { [weak self] in
@@ -130,7 +139,27 @@ import UniformTypeIdentifiers
           : URL(fileURLWithPath: "/System/Applications/Utilities/Console.app"))
     }
   }
-  private func render() { menu.render(selection, settings: settings) }
+  private func render() {
+    menu.render(
+      selection, settings: settings, pairedCount: pairedCount, manualAddress: manualAddress)
+  }
+  /// The address a paired tablet already reached, else the one chosen in
+  /// Settings, else the first physical interface rather than a VPN tunnel.
+  private func preferredAddress(for device: ADBDevice) -> LocalIPv4Address? {
+    if let reached = presence(for: device)?.localAddress { return reached }
+    let available = selection.addresses
+    if let manualAddress, available.contains(manualAddress) { return manualAddress }
+    return available.first { $0.interface.hasPrefix("en") } ?? available.first
+  }
+  /// One click in the panel: pick the tablet, settle the address, connect.
+  private func connect(to device: ADBDevice) {
+    guard selection.isEditable else { return }
+    selection.availableAddresses(LocalIPv4Address.available())
+    selection.select(device)
+    if let address = preferredAddress(for: device) { selection.select(address) }
+    render()
+    connect(rtc: !ProcessInfo.processInfo.arguments.contains("--tcp-video"))
+  }
   private func refreshDevices() async {
     selection.availableAddresses(LocalIPv4Address.available())
     render()
@@ -138,6 +167,7 @@ import UniformTypeIdentifiers
     let result: Result<[ADBDevice], Error>
     do { result = .success(try await devices.discover()) } catch { result = .failure(error) }
     usbDevices = result
+    pairedCount = await pairing.paired().count
     publishDevices()
   }
   /// Cable devices plus paired tablets waiting on the network. ADB being
@@ -146,7 +176,10 @@ import UniformTypeIdentifiers
     guard selection.isEditable else { return }
     let waiting = presences.values
       .sorted { $0.tablet.label < $1.tablet.label }
-      .map { ADBDevice(serial: Self.pairedPrefix + $0.tablet.id.base64EncodedString(), model: $0.tablet.label) }
+      .map {
+        ADBDevice(
+          serial: Self.pairedPrefix + $0.tablet.id.base64EncodedString(), model: $0.tablet.label)
+      }
     switch usbDevices {
     case .success(let usb): selection.discovered(.success(usb + waiting))
     case .failure(let error):
@@ -265,7 +298,11 @@ import UniformTypeIdentifiers
       && pendingStart == nil && (state == .idle || state == .failed)
   }
   private func install() {
-    guard selection.isEditable, let selected = selection.selectedDevice else { return }
+    // Installing goes over the cable, so it targets a cable-attached tablet.
+    guard selection.isEditable,
+      let selected = selection.devices.first(where: { presence(for: $0) == nil })
+    else { return }
+    selection.select(selected)
     let panel = NSOpenPanel()
     guard let apkType = UTType(filenameExtension: "apk") else { return }
     panel.allowedContentTypes = [apkType]
@@ -371,11 +408,11 @@ extension AppDelegate {
     } else if selection.selectedAddress == nil, selection.addresses.count == 1 {
       selection.select(selection.addresses[0])
     }
-    // A paired tablet already reached the host on one address; use that one.
+    // Nothing explicit: the address a paired tablet reached, or the automatic choice.
     if wanted == nil, let device = selection.selectedDevice,
-      let reached = presence(for: device)?.localAddress
+      let address = preferredAddress(for: device)
     {
-      selection.select(reached)
+      selection.select(address)
     }
     return selection.selectedAddress == nil
       ? (selection.readinessHelp ?? "Choose a Mac address with --address") : nil
@@ -433,6 +470,7 @@ extension AppDelegate {
       await refreshDevices()
       return reply(status())
     case "show":
+      menu.panel.showSettings = request["settings"] as? Bool == true
       menu.showWhenReady()
       return reply(status())
     case "connect":

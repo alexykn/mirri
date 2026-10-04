@@ -33,7 +33,7 @@ let usage = """
     unpair                      Forget every paired tablet
     watch [--interval seconds]  Print state and metrics until interrupted
     logs                        Print the host log folder
-    show                        Open the menu-bar panel
+    show [settings]             Open the menu-bar panel, optionally on its Settings page
     launch                      Start the host app if it is not running
     quit                        Stop any session and quit the host app
 
@@ -315,7 +315,9 @@ case "logs":
   emit(status) { status["logFolder"] as? String ?? "" }
 case "show":
   allow()
-  emit(checked(send(["command": "show"])), { "Panel opened" })
+  emit(
+    checked(send(["command": "show", "settings": positionals.first == "settings"])),
+    { "Panel opened" })
 case "quit":
   allow()
   guard isRunning() else {
