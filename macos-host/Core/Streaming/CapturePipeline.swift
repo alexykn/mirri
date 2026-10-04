@@ -164,9 +164,29 @@ public struct CaptureRateLimiter: Sendable {
   }
 }
 
+/// Keeps the stream at full rate for a while after the display last changed.
+/// ScreenCaptureKit reports an unchanged display as idle; stopping at once made
+/// every pause end with a ramp-up (encoder, bitrate estimate, the tablet's
+/// radio and pacing), which reads as inertia when the pointer moves again.
+public struct IdleCooldown: Sendable {
+  public static let seconds = 3.0
+  private var lastChange: CMTime?
+  public init() {}
+  public mutating func changed(at pts: CMTime) { lastChange = pts }
+  /// True while an idle callback at `pts` should resend the last frame.
+  public func repeats(at pts: CMTime) -> Bool {
+    guard let lastChange, pts.isValid else { return false }
+    let elapsed = CMTimeGetSeconds(CMTimeSubtract(pts, lastChange))
+    return elapsed.isFinite && elapsed >= 0 && elapsed < Self.seconds
+  }
+}
+
 public final class ScreenCapturer: NSObject, SCStreamOutput, @unchecked Sendable {
   private var stream: SCStream?
   private var limiter = CaptureRateLimiter()
+  private var cooldown = IdleCooldown()
+  /// The last changed frame, resent while the cooldown lasts. Holds one pool surface.
+  private var lastImage: CVPixelBuffer?
   private let encoder: VideoEncoder
   private let gate: VideoAdmission
   /// SCStream delivers callbacks on the single sampleHandlerQueue configured below.
@@ -233,9 +253,15 @@ public final class ScreenCapturer: NSObject, SCStreamOutput, @unchecked Sendable
       onRejected?(.nonComplete)
       return
     }
-    guard status == SCFrameStatus.complete.rawValue else {
+    let pts = CMSampleBufferGetPresentationTimeStamp(buffer)
+    let complete = status == SCFrameStatus.complete.rawValue
+    let repeating =
+      !complete && SCFrameStatus(rawValue: status) == .idle && lastImage != nil
+      && cooldown.repeats(at: pts)
+    guard complete || repeating else {
       switch SCFrameStatus(rawValue: status) {
       case .idle:
+        lastImage = nil
         onPendingSample?(.idle, encoder.pendingVTCallbacks)
         onRejected?(.idle)
       case .blank: onRejected?(.blank)
@@ -246,8 +272,10 @@ public final class ScreenCapturer: NSObject, SCStreamOutput, @unchecked Sendable
       }
       return
     }
-    let pts = CMSampleBufferGetPresentationTimeStamp(buffer)
+    if complete { cooldown.changed(at: pts) }
     guard limiter.admit(pts) else {
+      // Still the newest picture: keep it so a following idle frame can resend it.
+      if complete { lastImage = CMSampleBufferGetImageBuffer(buffer) }
       onRejected?(.overRate)
       return
     }
@@ -265,13 +293,14 @@ public final class ScreenCapturer: NSObject, SCStreamOutput, @unchecked Sendable
     onPendingSample?(.complete(gap25: gap.map { $0 > 25 } ?? false), pending)
     onCompleteCadence?(gap)
     onCompleteTiming?(pts, callbackNs)
-    guard let image = CMSampleBufferGetImageBuffer(buffer),
+    guard let image = complete ? CMSampleBufferGetImageBuffer(buffer) : lastImage,
       CVPixelBufferGetWidth(image) == 2456, CVPixelBufferGetHeight(image) == 1600,
       CVPixelBufferGetPixelFormatType(image) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
     else {
       onRejected?(.formatMismatch)
       return
     }
+    lastImage = image
     guard gate.reserve() else {
       onPendingSample?(.creditFull, encoder.pendingVTCallbacks)
       onRejected?(.creditFull)

@@ -68,6 +68,8 @@ final class RtcPeer: NSObject, LKRTCPeerConnectionDelegate, SCStreamOutput, @unc
   // SCStreamOutput is serialized on the dedicated sampleHandlerQueue below.
   private var lastCompletePTS: CMTime?
   private var limiter = CaptureRateLimiter()
+  private var cooldown = IdleCooldown()
+  private var lastImage: CVPixelBuffer?
   var videoMid: String? { transceiver?.mid }
   func metricsSummary() -> String {
     let outbound = lock.withLock { lastOutbound }
@@ -325,11 +327,23 @@ final class RtcPeer: NSObject, LKRTCPeerConnectionDelegate, SCStreamOutput, @unc
     guard type == .screen else { return }
     let attachments = CMSampleBufferGetSampleAttachmentsArray(sample,
       createIfNecessary: false) as? [[SCStreamFrameInfo: Any]]
-    let complete = (attachments?.first?[.status] as? Int) == SCFrameStatus.complete.rawValue
+    let status = attachments?.first?[.status] as? Int
+    let complete = status == SCFrameStatus.complete.rawValue
+    let pts = CMSampleBufferGetPresentationTimeStamp(sample)
+    // An unchanged display reports idle; keep resending the last picture for
+    // the cooldown so a pause does not end with a ramp-up.
+    let repeating =
+      status == SCFrameStatus.idle.rawValue && lastImage != nil && cooldown.repeats(at: pts)
+    if complete, pts.isValid { cooldown.changed(at: pts) }
+    if !complete && !repeating { lastImage = nil }
     var gapNs: UInt64?
+    if complete || repeating {
+      guard !pts.isValid || limiter.admit(pts) else {
+        if complete { lastImage = CMSampleBufferGetImageBuffer(sample) }
+        return
+      }
+    }
     if complete {
-      let pts = CMSampleBufferGetPresentationTimeStamp(sample)
-      guard !pts.isValid || limiter.admit(pts) else { return }
       if pts.isValid {
         if let prior = lastCompletePTS {
           let seconds = CMTimeGetSeconds(CMTimeSubtract(pts, prior))
@@ -340,13 +354,14 @@ final class RtcPeer: NSObject, LKRTCPeerConnectionDelegate, SCStreamOutput, @unc
         lastCompletePTS = pts
       }
     }
-    counters.received(complete: complete, gapNs: gapNs)
-    guard complete else { return }
+    counters.received(complete: complete || repeating, gapNs: gapNs)
+    guard complete || repeating else { return }
     guard
-      let pixel = CMSampleBufferGetImageBuffer(sample),
+      let pixel = complete ? CMSampleBufferGetImageBuffer(sample) : lastImage,
       CVPixelBufferGetWidth(pixel) == 2456, CVPixelBufferGetHeight(pixel) == 1600,
       CVPixelBufferGetPixelFormatType(pixel) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
     else { return }
+    lastImage = pixel
     lock.lock(); defer { lock.unlock() }
     guard !closed, captureEnabled else { return }
     let timestamp = Int64(DispatchTime.now().uptimeNanoseconds)

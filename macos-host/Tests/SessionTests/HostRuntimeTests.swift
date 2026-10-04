@@ -589,6 +589,22 @@ final class HostRuntimeTests: XCTestCase {
     XCTAssertEqual(fast.suffix(100).filter { $0 }.count, 50)
     XCTAssertFalse(zip(fast.suffix(100), fast.suffix(100).dropFirst()).contains { $0 && $1 })
   }
+  func testIdleCooldownResendsOnlyForAWhileAfterTheLastChange() {
+    func time(_ seconds: Double) -> CMTime {
+      CMTime(value: CMTimeValue(seconds * 1000), timescale: 1000)
+    }
+    var cooldown = IdleCooldown()
+    XCTAssertFalse(cooldown.repeats(at: time(1)))  // nothing has been shown yet
+    cooldown.changed(at: time(10))
+    XCTAssertTrue(cooldown.repeats(at: time(10.016)))
+    XCTAssertTrue(cooldown.repeats(at: time(10 + IdleCooldown.seconds - 0.01)))
+    XCTAssertFalse(cooldown.repeats(at: time(10 + IdleCooldown.seconds)))
+    XCTAssertFalse(cooldown.repeats(at: time(9)))
+    XCTAssertFalse(cooldown.repeats(at: .invalid))
+    // A new change restarts the period.
+    cooldown.changed(at: time(20))
+    XCTAssertTrue(cooldown.repeats(at: time(22.5)))
+  }
   func testAdmissionBoundAndReleaseAfterWrite() {
     let admission = VideoAdmission()
     XCTAssertTrue(admission.reserve())
