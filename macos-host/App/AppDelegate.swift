@@ -13,7 +13,6 @@ import UniformTypeIdentifiers
   private var sleepStop: Task<Void, Never>?
   private var selection = ConnectionSelection()
   private var control: ControlServer?
-  private var activeRtc = false
   func applicationDidFinishLaunching(_ notification: Notification) {
     coordinator = SessionCoordinator(
       permissions: { [permissions] in permissions.ready() },
@@ -127,18 +126,11 @@ import UniformTypeIdentifiers
     selection.discovered(result)
     render()
   }
-  /// A WebRTC session has no in-session reconnect: the tablet treats a lost
-  /// peer as terminal. Stop and start it again with the same choices instead.
   private func reconnect() {
-    Task {
-      guard activeRtc else { return await coordinator.reconnect() }
-      await stopSession()
-      connect(rtc: true)
-    }
+    Task { await coordinator.reconnect() }
   }
   private func connect(rtc: Bool) {
     guard pendingStart == nil, let target = selection.claimConnect() else { return }
-    activeRtc = rtc
     render()
     pendingStart = Task { [weak self] in
       guard let self else { return }

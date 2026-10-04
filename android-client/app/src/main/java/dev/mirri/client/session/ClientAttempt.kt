@@ -29,6 +29,9 @@ internal class ClientAttempt {
 
     @Volatile var rtcHelloSent = false
 
+    /** Set once per attempt and kept through interrupt: a later loss is an interruption, not a rejected negotiation. */
+    @Volatile var reachedStreaming = false
+
     @Volatile var active = true
     var inputBatchSequence = 0uL
     private val decoderFailureReported = AtomicBoolean()

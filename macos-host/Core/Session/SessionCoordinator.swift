@@ -482,10 +482,15 @@ public actor SessionCoordinator {
     case .mediaProof(let description): logger.diagnostic("rtc-media-proof-\(description)")
     case .outboundFrames(let description): logger.diagnostic("rtc-outbound-\(description)")
     case .failed:
-      logger.diagnostic("rtc-peer-failed-before-ready")
       rtcFailure = true
-      if snapshot.state == .streaming { await terminal(.transport) }
-      else { await control?.close() }
+      if snapshot.state == .streaming {
+        // A lost ICE path is an interruption: keep the display and renegotiate.
+        logger.diagnostic("rtc-peer-lost-while-streaming")
+        await transportClosed(id: attempt.incarnation, channelEpoch: attempt.epoch)
+      } else {
+        logger.diagnostic("rtc-peer-failed-before-ready")
+        await control?.close()
+      }
     case .candidate(let mid, let index, let text):
       if rtcLocalCandidateCount == 0 && rtcCandidates.isEmpty {
         let parts = text.split(whereSeparator: \.isWhitespace)
@@ -894,10 +899,18 @@ public actor SessionCoordinator {
   }
   public func transportClosed(id: UInt64, channelEpoch: UInt32) async {
     guard incarnation == id, epoch == channelEpoch, snapshot.state == .streaming else { return }
-    if rtcPeer != nil { await terminal(.transport); return }
     // Claim transition before any await: EOF, encoder callbacks and ping timeouts
     // may arrive together, but exactly one cleanup owns this epoch.
     snapshot.state = .waitingForReconnect
+    // The peer belongs to the lost epoch; the retry negotiates a new one on the
+    // same session ID while the display stays up.
+    rtcTimer?.cancel()
+    rtcTimer = nil
+    rtcEvents?.cancel()
+    rtcEvents = nil
+    let oldPeer = rtcPeer
+    rtcPeer = nil
+    rtcWriter = nil
     videoTiming?.freeze()
     latencyTrace?.freeze()
     reconnectUntil = ContinuousClock.now.advanced(by: .seconds(preferences.graceSeconds))
@@ -921,6 +934,7 @@ public actor SessionCoordinator {
     tick = nil
     metrics.reset()
     let teardown = Task {
+      await oldPeer?.stop()
       await oldCapture?.stop()
       if let oldTiming { logger.metrics(oldTiming.finish()) }
       if let oldTrace { logger.metrics(oldTrace.report(final: true)) }
@@ -983,8 +997,16 @@ public actor SessionCoordinator {
         let oldVideo = video
         video = nil
         authenticatedControl = false
+        rtcTimer?.cancel()
+        rtcTimer = nil
+        rtcEvents?.cancel()
+        rtcEvents = nil
+        let oldPeer = rtcPeer
+        rtcPeer = nil
+        rtcWriter = nil
         let oldRoute = route
         let teardown = Task {
+          await oldPeer?.stop()
           await oldCapture?.stop()
           if let oldTiming { logger.metrics(oldTiming.finish()) }
           if let oldTrace { logger.metrics(oldTrace.report(final: true)) }

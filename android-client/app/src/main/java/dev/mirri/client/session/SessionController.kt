@@ -259,8 +259,11 @@ class SessionController(
             throw e
         } catch (e: Exception) {
             if (spec.media == NetworkMedia.RTC) Log.i("MirriLifecycle", "RTC attempt exception class=${e.javaClass.simpleName}")
-            rtcFailureNotice(spec, owner, if (e.message?.contains("hardware", true) == true) 5 else 6)
-            if (e is DecoderFailure || e is PeerAuthenticationException || fatalProtocol(e)) {
+            // An RTC stream that was running and then lost its path or control
+            // connection is retried on the host's next epoch, like a closed socket.
+            val interrupted = spec.media == NetworkMedia.RTC && owner.reachedStreaming && e is WireException
+            if (!interrupted) rtcFailureNotice(spec, owner, if (e.message?.contains("hardware", true) == true) 5 else 6)
+            if (!interrupted && (e is DecoderFailure || e is PeerAuthenticationException || fatalProtocol(e))) {
                 terminalLaunch = true
                 state(ClientSessionState.FAILED, e.message ?: "Protocol rejected")
                 AttemptResult.TERMINAL
@@ -709,6 +712,7 @@ class SessionController(
                         if (!peer.udpConnected()) throw WireException("RTC start before UDP")
                         gate.start()
                         owner.streaming = true
+                        owner.reachedStreaming = true
                         state(ClientSessionState.STREAMING, "RTC 2456x1600 @ 60 Hz hardware $codecName")
                     }
                     MessageType.STOP_SESSION.id -> {
