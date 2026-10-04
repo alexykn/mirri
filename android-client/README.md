@@ -1,65 +1,71 @@
-# Mirri Android client (runtime preview)
+# Mirri client (Android)
 
-`app` is the single Android module; the debug APK is produced at
-`app/build/outputs/apk/debug/app-debug.apk` (`versionCode=3`). It is not a
-physically accepted release. **Do not install it on the tablet without an
-explicit owner action.** The Mac host launches it with the one-time token,
-epoch, protocol version, mode, and either two USB `adb reverse` loopback ports
-or a pinned TLS IPv4 endpoint. Network (USB setup) needs an authorized initial
-USB launch but reconnects over the selected IP interface without ADB; both
-channels verify the pinned, nonexpired ephemeral certificate before any token
-is sent. The network control channel obtains the host's current epoch through
-the fixed MRNB preface inside TLS; USB framing and direct `SocketChannel`
-processing are unchanged. TLS uses bounded reusable 16 KiB input/output scratch
-buffers, not frame-sized heap copies. Wrong/expired server identity is terminal.
-This is **not** Wi-Fi Direct or a claim of device-verified network streaming.
-Desktop-JVM tests connect this production TLS connector to an ephemeral
-production macOS loopback server with a small synthetic payload and wrong-pin
-rejection; they are not a tablet connectivity or performance measurement.
+The tablet side: it shows the Mac's display full screen and sends touch and
+pencil input back. For what Mirri is and how to install it, start at the
+[main README](../README.md).
 
-The AndroidX `ComponentActivity` collects a lifecycle-aware `StateFlow` status.
-Its immersive landscape `SurfaceView` selects/readbacks the exact physical
-1600×2456@60 mode before `ClientHello` (the current host requires this active
-mode), then re-verifies it after negotiation. Only an exact 2456×1600 surface
-and a hardware AVC/HEVC decoder supporting 2456×1600@60 are accepted. On the
-authorized tablet a transient 90 Hz mode converged through a bounded
-own-display change listener to requested/observed 1600×2456@60 before Hello;
-the listener unregisters on success, timeout or cancellation. A hardware AVC
-decoder reported coded 2464×1600 with visible crop 0,0–2455,1599, BT.709
-limited; incorrect visible crop/size/color readback fails closed. Video
-uses an asynchronous `MediaCodec` callback; configure, submit, flush and stop
-are serialized on the codec's HandlerThread. Cancellable fixed-pool leases
-return even after receive/cancellation failures. Codec probe, pool, decoder and
-receiver have separate owners; each attempt closes only its own resources;
-control and video are separate channels. No Wi-Fi topology provisioning or software decoder exists.
-Each reconnect attempt owns its sockets, decoder, frame counters and failure
-gate, and finally closes those resources before detaching the Surface. After
-USB Stop/retry needs a fresh host `am start -S` activity/controller and epoch;
-the host retains only its own reverse mappings/display within reconnect grace.
-Source tests cover old-attempt callback rejection and blocked-socket release,
-not activity restart or cable unplug/replug. Observed native AVC40 90-second
-host sent rates were 59.92/59.90 full-window fps with SCK queue 2, three frame
-credits and native 60 Hz capture cadence; the older 30-minute median interval
-sent 56.4, an initial new-pacing soak was interrupted, and a subsequently
-completed uninterrupted 1801.58 active-second new-pacing soak sent only
-**54.341 fps** at host USB write. It **fails** the ≥59 fps sustained gate.
-See [`../docs/native-validation.md`](../docs/native-validation.md). The new
-numeric-only codec/render stage probe in
-[`../docs/timing-calibration.md`](../docs/timing-calibration.md) is
-**source-only, not deployed**; framework render notification is not panel
-scanout and requires calibration and callback-coverage checks.
+This app is sideloaded as a debug build. It is not on the Google Play Store
+and is not going to be.
 
-From this directory, with JDK 17 and Android SDK 35 configured:
+## Layout
 
-```sh
-./gradlew testDebugUnitTest assembleDebug ktlintCheck
+```
+app/src/main/java/dev/mirri/client/
+  MainActivity.kt   full-screen surface, waits for the paired Mac
+  session/          one session: connect, negotiate, retry
+  pairing/          stored pairing, Bonjour discovery, rendezvous
+  video/            hardware decoder, presentation pacing, WebRTC receiver
+  display/          panel mode selection and readback
+  input/            touch and pencil gestures
+  protocol/         wire codec, control channel, WebRTC signalling
+  transport/        pinned TLS connection
 ```
 
-These checks validate compilation, JVM fixture/gesture/bounds/localhost
-transport tests, and formatting; they **do not** verify the physical mode,
-decoder/compositor colorimetry (Android has no explicit sRGB transfer enum),
-actual key delivery, 59+ fps, 30-minute memory stability or unplug/replug.
-The optional hardware `FEATURE_LowLatency` is advertised and enabled only
-when supported; absence does not reject an exact hardware decoder. Actual
-decoder behavior still requires device measurement. No physical integration
-claim should be inferred from a built APK.
+## Build, install, test
+
+```sh
+export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+./gradlew assembleDebug                # app/build/outputs/apk/debug/app-debug.apk
+./gradlew testDebugUnitTest ktlintCheck
+./gradlew ktlintFormat                 # fix formatting
+```
+
+Install with the host, over the cable:
+
+```sh
+mirri install app/build/outputs/apk/debug/app-debug.apk
+```
+
+Warnings are errors in this build, and ktlint is strict.
+
+## How it starts
+
+- **From the Mac over the cable:** the host starts the activity with the
+  session's credentials as Intent extras. The same launch stores the pairing.
+- **By itself, once paired:** opened with no launch, the app looks for the Mac
+  with network service discovery (`_mirri._tcp`), falls back to the address
+  that worked last time, connects with TLS pinned to the Mac's certificate and
+  waits to be handed a session.
+
+When a session ends the app goes back to waiting. A session that failed asks
+the Mac to start again; one the Mac stopped does not.
+
+## Things that will surprise you
+
+- **One tablet model.** The client requires a 1600 × 2456 panel and a hardware
+  H.264 decoder that reports 2456 × 1600 at 60 fps. Anything else is rejected,
+  not scaled.
+- **Panel refresh.** It asks for the 120 Hz mode and falls back to 60 Hz when
+  the tablet's own policy refuses, which this model does (it caps the app at
+  90 Hz, and switches to 90 Hz for a few seconds after a touch).
+- **Frames are held briefly on purpose.** Each decoded frame is stamped 24 ms
+  ahead and one refresh after the previous one. Without that, about one frame
+  in ten was replaced before it was ever shown.
+- **A low-latency Wi-Fi lock is held while streaming** to keep the radio out
+  of power save.
+- **The activity is exported** so the host can launch it. Any app on the
+  tablet can therefore send it a launch. See the limits in
+  [`protocol/pairing.md`](../protocol/pairing.md).
+- **Target SDK is 31** to keep the immersive landscape behaviour this tablet
+  was tested with.
