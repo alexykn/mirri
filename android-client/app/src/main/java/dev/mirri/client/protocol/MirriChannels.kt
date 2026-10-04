@@ -96,6 +96,7 @@ class ControlChannel(
             bytes.readFully(body)
             val message = WireCodec.decode(body.array())
             if (message != null) {
+                if (order.discardStaleRtc(message)) continue
                 order.accept(message)
                 return message
             }

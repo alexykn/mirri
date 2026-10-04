@@ -37,18 +37,28 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class ClientRuntimeTest {
-    @Test fun launchBoundaryProducesOnlyValidatedLoopbackCredentials() {
+    @Test fun launchBoundaryProducesOnlyValidatedNetworkCredentials() {
         val token = "ab".repeat(32)
-        val launch = ClientLaunchBoundary.validated(token, 7, 5561, 5560, 1) ?: error("valid launch rejected")
+        val pin = "cd".repeat(32)
+
+        fun validated(
+            token: String,
+            epoch: Int,
+            control: Int,
+            video: Int,
+            major: Int,
+        ) = ClientLaunchBoundary.validated(token, epoch, control, video, major, "network", "192.0.2.15", pin)
+        val launch = validated(token, 7, 5561, 5560, 1) ?: error("valid launch rejected")
         assertEquals(7u, launch.epoch)
         assertEquals(5561, launch.endpoint.controlPort)
         assertEquals(5560, launch.endpoint.videoPort)
         assertTrue(launch.token.all { it == 0xab.toByte() })
-        assertEquals(null, ClientLaunchBoundary.validated(token.uppercase(), 7, 5561, 5560, 1))
-        assertEquals(null, ClientLaunchBoundary.validated(token, 0, 5561, 5560, 1))
-        assertEquals(null, ClientLaunchBoundary.validated(token, 7, 5561, 5560, 2))
-        assertEquals(null, ClientLaunchBoundary.validated(token, 7, 5562, 5560, 1))
-        assertEquals(null, ClientLaunchBoundary.validated(token, 7, 5561, 5562, 1))
+        assertEquals(null, validated(token.uppercase(), 7, 5561, 5560, 1))
+        assertEquals(null, validated(token, 0, 5561, 5560, 1))
+        assertEquals(null, validated(token, 7, 5561, 5560, 2))
+        assertEquals(null, validated(token, 7, 5562, 5560, 1))
+        assertEquals(null, validated(token, 7, 5561, 5562, 1))
+        assertEquals(null, ClientLaunchBoundary.validated(token, 7, 5561, 5560, 1))
     }
 
     @Test fun displayOwnerWaitsForRealExactTransitionAndCancelsListenerOnTimeout() =

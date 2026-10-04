@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreMedia
+import CoreVideo
 import Foundation
 import VideoToolbox
 import XCTest
@@ -389,104 +390,6 @@ final class HostRuntimeTests: XCTestCase {
     await oldStart.value
     await nextStart.value
   }
-  func testClosedUsbRouteCannotBindAfterPendingAdbDiscoveryCompletes() async throws {
-    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: folder) }
-    let entered = folder.appendingPathComponent("entered")
-    let proceed = folder.appendingPathComponent("proceed")
-    let executable = folder.appendingPathComponent("fake-adb")
-    let script = """
-      #!/bin/sh
-      if [ "$1" = devices ]; then
-        touch "\(entered.path)"
-        while [ ! -f "\(proceed.path)" ]; do sleep 0.01; done
-        printf 'List of devices attached\nA device usb:1 model:synthetic\n'
-      fi
-      """
-    try Data(script.utf8).write(to: executable)
-    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-    let service = USBDeviceService(adb: ADBClient(executable: executable, commandTimeout: 3))
-    let route = try await service.route(on: ADBDevice(serial: "A", model: "synthetic"))
-    let preparing = Task { try await route.prepare() }
-    for _ in 0..<100 where !FileManager.default.fileExists(atPath: entered.path) {
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    XCTAssertTrue(FileManager.default.fileExists(atPath: entered.path))
-    let finished = folder.appendingPathComponent("finished")
-    let closing = Task {
-      await route.close()
-      try Data().write(to: finished)
-    }
-    for _ in 0..<100 {
-      if await route.closureStarted { break }
-      await Task.yield()
-    }
-    let closureStarted = await route.closureStarted
-    XCTAssertTrue(closureStarted)
-    XCTAssertFalse(FileManager.default.fileExists(atPath: finished.path))
-    try Data().write(to: proceed)
-    try await closing.value
-    do {
-      _ = try await preparing.value
-      XCTFail("closed route must not publish listeners after discovery")
-    } catch {
-      XCTAssertEqual(error as? HostFailure, .invalidState)
-    }
-    let fresh = try await service.route(on: ADBDevice(serial: "A", model: "synthetic"))
-    await fresh.close()
-  }
-  func testUsbRouteCloseJoinsPendingClientLaunchBeforeReleasingService() async throws {
-    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: folder) }
-    let entered = folder.appendingPathComponent("entered")
-    let proceed = folder.appendingPathComponent("proceed")
-    let executable = folder.appendingPathComponent("fake-adb")
-    let script = """
-      #!/bin/sh
-      if [ "$4" = am ]; then
-        touch "\(entered.path)"
-        while [ ! -f "\(proceed.path)" ]; do sleep 0.01; done
-      fi
-      """
-    try Data(script.utf8).write(to: executable)
-    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-    let service = USBDeviceService(adb: ADBClient(executable: executable, commandTimeout: 3))
-    let device = ADBDevice(serial: "A", model: "synthetic")
-    let route = try await service.route(on: device)
-    let credentials = AttemptCredentials(
-      token: Data(repeating: 1, count: 32),
-      sessionId: Data(repeating: 2, count: 16), epoch: 1)
-    let launching = Task { try await route.bootstrap(credentials) }
-    for _ in 0..<100 where !FileManager.default.fileExists(atPath: entered.path) {
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    XCTAssertTrue(FileManager.default.fileExists(atPath: entered.path))
-    let closing = Task { await route.close() }
-    for _ in 0..<100 {
-      if await route.closureStarted { break }
-      await Task.yield()
-    }
-    let closed = await route.closureStarted
-    XCTAssertTrue(closed)
-    do {
-      _ = try await service.route(on: device)
-      XCTFail("service must not release route during an in-flight client launch")
-    } catch {
-      XCTAssertEqual(error as? HostFailure, .invalidState)
-    }
-    try Data().write(to: proceed)
-    await closing.value
-    do {
-      try await launching.value
-      XCTFail("late launch completion must not revive a closed route")
-    } catch {
-      XCTAssertEqual(error as? HostFailure, .invalidState)
-    }
-    let next = try await service.route(on: device)
-    await next.close()
-  }
   @MainActor func testCoordinatorClaimsStopAndRejectsStaleTransportCallback() async {
     var snapshots: [HostState] = []
     let logDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -593,12 +496,13 @@ final class HostRuntimeTests: XCTestCase {
     .write(to: executable)
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
     let adb = ADBClient(executable: executable)
+    let network = NetworkLaunch(address: "192.0.2.1", pin: Data(repeating: 2, count: 32))
     try await adb.launchClient(
       device: ADBDevice(serial: "synthetic", model: "synthetic"),
-      token: Data(repeating: 0x12, count: 32), epoch: 1)
+      token: Data(repeating: 0x12, count: 32), epoch: 1, network: network)
     try await adb.launchClient(
       device: ADBDevice(serial: "synthetic", model: "synthetic"),
-      token: Data(repeating: 0x34, count: 32), epoch: 2)
+      token: Data(repeating: 0x34, count: 32), epoch: 2, network: network)
     let invocations = try String(contentsOf: calls, encoding: .utf8)
       .components(separatedBy: "END\n").dropLast()
     XCTAssertEqual(invocations.count, 2)
@@ -615,197 +519,75 @@ final class HostRuntimeTests: XCTestCase {
       } else {
         XCTFail("launch must carry host epoch")
       }
-      XCTAssertEqual(arguments.suffix(3).map(String.init), ["--es", "mirri_mode", "usb"])
+      if let modeArgument = arguments.firstIndex(of: "mirri_mode") {
+        XCTAssertEqual(arguments[modeArgument + 1], "network")
+      } else {
+        XCTFail("launch must select the network route")
+      }
       XCTAssertFalse(invocation.contains("force-stop"))
     }
   }
-  func testReverseOwnerNeverCleansAnotherDeviceAndRetriesSameDevice() async throws {
+  func testOnlyRtcLaunchCarriesSameLowercaseSessionIdAcrossEpochs() async throws {
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: folder) }
     let calls = folder.appendingPathComponent("calls")
-    let marker = folder.appendingPathComponent("installed")
     let executable = folder.appendingPathComponent("fake-adb")
-    let script = """
-      #!/bin/sh
-      echo "$@" >> "\(calls.path)"
-      if [ "$3" = reverse ] && [ "$4" = --list ]; then
-        if [ -f "\(marker.path)" ]; then
-          printf 'A tcp:5560 tcp:5560\\nA tcp:5561 tcp:5561\\n'
-        fi
-      fi
-      if [ "$3" = reverse ] && [ "$4" = tcp:5561 ]; then touch "\(marker.path)"; fi
-      exit 0
-      """
-    try Data(script.utf8).write(to: executable)
+    try Data("#!/bin/sh\nprintf '%s\\n' \"$@\" >> '\(calls.path)'\nprintf 'END\\n' >> '\(calls.path)'\n".utf8)
+      .write(to: executable)
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-    let owner = AdbReverseManager(adb: ADBClient(executable: executable))
-    let first = ADBDevice(serial: "A", model: "synthetic")
-    try await owner.install(on: first)
-    await owner.remove(on: ADBDevice(serial: "B", model: "synthetic"))
-    var logged = try String(contentsOf: calls, encoding: .utf8)
-    XCTAssertFalse(logged.contains("--remove"))
-    await owner.retryOwnedCleanup(on: first)
-    logged = try String(contentsOf: calls, encoding: .utf8)
-    XCTAssertEqual(logged.components(separatedBy: "--remove").count - 1, 2)
-  }
-  func testReverseLeaseSurvivesAddTimeoutAfterSideEffect() async throws {
-    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: folder) }
-    let calls = folder.appendingPathComponent("calls")
-    let mapped = folder.appendingPathComponent("mapped")
-    let executable = folder.appendingPathComponent("fake-adb")
-    let script = """
-      #!/bin/sh
-      echo "$@" >> "\(calls.path)"
-      if [ "$3" = reverse ] && [ "$4" = --list ]; then
-        [ ! -f "\(mapped.path)" ] || printf 'A tcp:5560 tcp:5560\\n'
-        printf 'A tcp:5562 tcp:6000\\n'
-      fi
-      if [ "$3" = reverse ] && [ "$4" = tcp:5560 ]; then
-        touch "\(mapped.path)"
-        exec sleep 5
-      fi
-      if [ "$3" = reverse ] && [ "$4" = --remove ] && [ "$5" = tcp:5560 ]; then
-        rm "\(mapped.path)"
-      fi
-      exit 0
-      """
-    try Data(script.utf8).write(to: executable)
-    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-    let owner = AdbReverseManager(adb: ADBClient(executable: executable, commandTimeout: 2))
-    let device = ADBDevice(serial: "A", model: "synthetic")
-    do {
-      try await owner.install(on: device)
-      XCTFail("reverse add response should time out after creating the mapping")
-    } catch HostFailure.timeout {
-      XCTAssertTrue(FileManager.default.fileExists(atPath: mapped.path))
+    let adb = ADBClient(executable: executable)
+    let device = ADBDevice(serial: "synthetic", model: "synthetic")
+    let token = Data(repeating: 0x12, count: 32)
+    let id = Data((0..<16).map(UInt8.init))
+    let rtc = NetworkLaunch(address: "192.0.2.1", pin: Data(repeating: 2, count: 32),
+      media: .rtc, sessionId: id)
+    for epoch: UInt32 in [1, 2] {
+      try await adb.launchClient(device: device, token: token, epoch: epoch, network: rtc)
     }
-    await owner.remove(on: device)
-    XCTAssertFalse(FileManager.default.fileExists(atPath: mapped.path))
-    let logged = try String(contentsOf: calls, encoding: .utf8)
-    XCTAssertEqual(logged.components(separatedBy: "reverse --remove tcp:5560").count - 1, 1)
-    XCTAssertFalse(logged.contains("--remove tcp:5561"))
-    XCTAssertFalse(logged.contains("--remove tcp:5562"))
-  }
-  func testReverseSecondAddFailureReleasesBothSideEffectsOnly() async throws {
-    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: folder) }
-    let calls = folder.appendingPathComponent("calls")
-    let first = folder.appendingPathComponent("first")
-    let second = folder.appendingPathComponent("second")
-    let executable = folder.appendingPathComponent("fake-adb")
-    let script = """
-      #!/bin/sh
-      echo "$@" >> "\(calls.path)"
-      if [ "$3" = reverse ] && [ "$4" = --list ]; then
-        [ ! -f "\(first.path)" ] || printf 'A tcp:5560 tcp:5560\\n'
-        [ ! -f "\(second.path)" ] || printf 'A tcp:5561 tcp:5561\\n'
-        printf 'A tcp:5562 tcp:6000\\n'
-      fi
-      if [ "$3" = reverse ] && [ "$4" = tcp:5560 ]; then touch "\(first.path)"; fi
-      if [ "$3" = reverse ] && [ "$4" = tcp:5561 ]; then touch "\(second.path)"; exit 1; fi
-      if [ "$3" = reverse ] && [ "$4" = --remove ]; then
-        [ "$5" != tcp:5560 ] || rm "\(first.path)"
-        [ "$5" != tcp:5561 ] || rm "\(second.path)"
-      fi
-      exit 0
-      """
-    try Data(script.utf8).write(to: executable)
-    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-    let owner = AdbReverseManager(adb: ADBClient(executable: executable))
-    let device = ADBDevice(serial: "A", model: "synthetic")
+    try await adb.launchClient(device: device, token: token, epoch: 3,
+      network: NetworkLaunch(address: "192.0.2.1", pin: Data(repeating: 2, count: 32)))
     do {
-      try await owner.install(on: device)
-      XCTFail("second command should fail after its side effect")
-    } catch HostFailure.adb {
-      XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
-      XCTAssertTrue(FileManager.default.fileExists(atPath: second.path))
+      try await adb.launchClient(device: device, token: token, epoch: 4,
+        network: NetworkLaunch(address: "192.0.2.1", pin: Data(repeating: 2, count: 32), media: .rtc))
+      XCTFail("RTC must reject missing session ID")
+    } catch { XCTAssertEqual(error as? HostFailure, .unauthorized) }
+    let invocations = try String(contentsOf: calls, encoding: .utf8)
+      .components(separatedBy: "END\n").dropLast()
+    XCTAssertEqual(invocations.count, 3)
+    for (offset, call) in invocations.enumerated() {
+      let args = call.split(separator: "\n").map(String.init)
+      XCTAssertEqual(args.prefix(8), ["-s", "synthetic", "shell", "am", "start", "-S", "-n",
+        "dev.mirri.client/.MainActivity"])
+      XCTAssertEqual(args[args.firstIndex(of: "mirri_epoch")! + 1], String(offset + 1))
+      if offset < 2 {
+        XCTAssertEqual(args[args.firstIndex(of: "mirri_media")! + 1], "rtc")
+        XCTAssertEqual(args[args.firstIndex(of: "mirri_session_id")! + 1],
+          "000102030405060708090a0b0c0d0e0f")
+      } else {
+        XCTAssertFalse(args.contains("mirri_media"))
+        XCTAssertFalse(args.contains("mirri_session_id"))
+      }
     }
-    await owner.remove(on: device)
-    XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
-    XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
-    let logged = try String(contentsOf: calls, encoding: .utf8)
-    XCTAssertEqual(logged.components(separatedBy: "reverse --remove").count - 1, 2)
-    XCTAssertFalse(logged.contains("--remove tcp:5562"))
   }
-  func testExplicitReverseCleanupSkipsUnrelatedTarget() async throws {
-    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: folder) }
-    let calls = folder.appendingPathComponent("calls")
-    let executable = folder.appendingPathComponent("fake-adb")
-    let script = """
-      #!/bin/sh
-      echo "$@" >> "\(calls.path)"
-      if [ "$3" = reverse ] && [ "$4" = --list ]; then
-        printf 'A tcp:5560 tcp:6000\\nA tcp:5561 tcp:5561\\n'
-      fi
-      exit 0
-      """
-    try Data(script.utf8).write(to: executable)
-    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-    let owner = AdbReverseManager(adb: ADBClient(executable: executable))
-    try await owner.explicitCleanup(on: ADBDevice(serial: "A", model: "synthetic"))
-    let logged = try String(contentsOf: calls, encoding: .utf8)
-    XCTAssertFalse(logged.contains("--remove tcp:5560"))
-    XCTAssertTrue(logged.contains("--remove tcp:5561"))
-  }
-  func testOwnedReverseMappingsReinstalledAfterSyntheticUsbLoss() async throws {
-    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: folder) }
-    let calls = folder.appendingPathComponent("calls")
-    let marker = folder.appendingPathComponent("mapped")
-    let executable = folder.appendingPathComponent("fake-adb")
-    let script = """
-      #!/bin/sh
-      echo "$@" >> "\(calls.path)"
-      if [ "$3" = reverse ] && [ "$4" = --list ] && [ -f "\(marker.path)" ]; then
-        printf 'A tcp:5560 tcp:5560\\nA tcp:5561 tcp:5561\\n'
-      fi
-      if [ "$3" = reverse ] && [ "$4" = tcp:5561 ]; then touch "\(marker.path)"; fi
-      exit 0
-      """
-    try Data(script.utf8).write(to: executable)
-    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-    let owner = AdbReverseManager(adb: ADBClient(executable: executable))
-    let device = ADBDevice(serial: "A", model: "synthetic")
-    try await owner.install(on: device)
-    try FileManager.default.removeItem(at: marker)  // ADB lost mappings on synthetic USB loss.
-    try await owner.install(on: device)
-    let logged = try String(contentsOf: calls, encoding: .utf8)
-    XCTAssertEqual(logged.components(separatedBy: "reverse tcp:5560 tcp:5560").count - 1, 2)
-    XCTAssertFalse(logged.contains("--remove"))
-  }
-  func testReconnectKeepsExistingOwnedReverseMappings() async throws {
-    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: folder) }
-    let calls = folder.appendingPathComponent("calls")
-    let marker = folder.appendingPathComponent("mapped")
-    let executable = folder.appendingPathComponent("fake-adb")
-    let script = """
-      #!/bin/sh
-      echo "$@" >> "\(calls.path)"
-      if [ "$3" = reverse ] && [ "$4" = --list ] && [ -f "\(marker.path)" ]; then
-        printf 'A tcp:5560 tcp:5560\\nA tcp:5561 tcp:5561\\n'
-      fi
-      if [ "$3" = reverse ] && [ "$4" = tcp:5561 ]; then touch "\(marker.path)"; fi
-      exit 0
-      """
-    try Data(script.utf8).write(to: executable)
-    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-    let owner = AdbReverseManager(adb: ADBClient(executable: executable))
-    let device = ADBDevice(serial: "A", model: "synthetic")
-    try await owner.install(on: device)
-    try await owner.install(on: device)
-    let logged = try String(contentsOf: calls, encoding: .utf8)
-    XCTAssertEqual(logged.components(separatedBy: "reverse tcp:5560 tcp:5560").count - 1, 1)
-    XCTAssertEqual(logged.components(separatedBy: "reverse tcp:5561 tcp:5561").count - 1, 1)
-    XCTAssertFalse(logged.contains("--remove"))
+  func testCaptureRateLimiterKeepsSlippedUpdatesAndHalvesFasterContent() {
+    func admitted(_ milliseconds: [Double]) -> [Bool] {
+      var limiter = CaptureRateLimiter()
+      return milliseconds.map {
+        limiter.admit(CMTime(value: CMTimeValue($0 * 1000), timescale: 1_000_000))
+      }
+    }
+    // 60 fps content on a 120 Hz display: one update slips a refresh late, one early.
+    var slipped: [Double] = []
+    for cycle in 0..<40 {
+      let base = Double(cycle) * 100
+      slipped += [base, base + 16.7, base + 41.7, base + 50, base + 66.7, base + 75]
+    }
+    XCTAssertFalse(admitted(slipped).contains(false))
+    // 120 fps content settles to every other frame.
+    let fast = admitted((0..<120).map { Double($0) * 8.333 })
+    XCTAssertEqual(fast.suffix(100).filter { $0 }.count, 50)
+    XCTAssertFalse(zip(fast.suffix(100), fast.suffix(100).dropFirst()).contains { $0 && $1 })
   }
   func testAdmissionBoundAndReleaseAfterWrite() {
     let admission = VideoAdmission()
@@ -870,6 +652,69 @@ final class HostRuntimeTests: XCTestCase {
     XCTAssertEqual(admission.depth, 0)
     let reported = await failure.wait(timeout: .seconds(1))
     XCTAssertTrue(reported)
+  }
+  func testHardwareEncoderEmitsFinalFrameWithoutFutureInput() async throws {
+    guard ProcessInfo.processInfo.environment["MIRRI_HARDWARE_ENCODER_TEST"] == "1" else {
+      throw XCTSkip("requires an explicit hardware-encoder test opt-in")
+    }
+    for codec in [VideoCodec.avc, .hevc] {
+      let encoder = VideoEncoder(codec: codec, bitrate: 40_000_000)
+      let initialFrame = OneShotSignal()
+      let finalFrame = OneShotSignal()
+      let failures = VideoAdmission()
+      encoder.onFailure = { _ = failures.reserve() }
+      encoder.onUnit = { unit in
+        if unit.pts == 0 {
+          Task { await initialFrame.signal() }
+          XCTAssertTrue(unit.keyframe)
+          XCTAssertEqual(unit.parameterSets?.count, codec.sets)
+          if codec == .avc {
+            guard let sps = unit.parameterSets?.first, sps.count >= 4 else {
+              return XCTFail("missing AVC SPS")
+            }
+            XCTAssertEqual(sps[1], 100, "AVC must use High profile")
+            XCTAssertLessThanOrEqual(sps[3], 51, "must fit the negotiated Level 5.1 decoder")
+          }
+        }
+        if unit.pts == 100_000_000 {
+          XCTAssertFalse(unit.keyframe, "exercise a final non-key frame")
+          Task { await finalFrame.signal() }
+        }
+      }
+      try encoder.prepare()
+      defer { encoder.invalidate() }
+      var allocated: CVPixelBuffer?
+      let attributes = [kCVPixelBufferIOSurfacePropertiesKey as String: [:]] as CFDictionary
+      XCTAssertEqual(
+        CVPixelBufferCreate(
+          kCFAllocatorDefault, 2456, 1600, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+          attributes, &allocated), kCVReturnSuccess)
+      let buffer = try XCTUnwrap(allocated)
+      XCTAssertEqual(CVPixelBufferLockBaseAddress(buffer, []), kCVReturnSuccess)
+      for plane in 0..<2 {
+        let base = try XCTUnwrap(CVPixelBufferGetBaseAddressOfPlane(buffer, plane))
+        memset(
+          base, plane == 0 ? 16 : 128,
+          CVPixelBufferGetBytesPerRowOfPlane(buffer, plane)
+            * CVPixelBufferGetHeightOfPlane(buffer, plane))
+      }
+      XCTAssertEqual(CVPixelBufferUnlockBaseAddress(buffer, []), kCVReturnSuccess)
+      for index in 0...6 {
+        XCTAssertTrue(
+          encoder.encode(
+            buffer, time: CMTime(value: Int64(index), timescale: 60),
+            captureCallbackNs: DispatchTime.now().uptimeNanoseconds))
+        if index < 6 { try await Task.sleep(for: .nanoseconds(16_666_667)) }
+      }
+      // Do not flush or invalidate until after observing output: a static desktop
+      // must display its last update without needing another capture submission.
+      let emitted = await finalFrame.wait(timeout: .seconds(1))
+      XCTAssertTrue(emitted, "\(codec) held the final frame without future input")
+      let started = await initialFrame.wait(timeout: .seconds(1))
+      XCTAssertTrue(started, "\(codec) did not emit its initial IDR")
+      XCTAssertEqual(failures.depth, 0)
+      XCTAssertEqual(encoder.pendingVTCallbacks, 0)
+    }
   }
   func testActualEncoderPendingCallbackOwnerNormalInlineErrorDropAndInvalidate() throws {
     // Exercise the same owner used by VideoEncoder.encode and its VT callback,
@@ -996,25 +841,25 @@ final class HostRuntimeTests: XCTestCase {
       DisplayReadback.matches(
         .init(
           logical: CGSize(width: 1228, height: 800), pixels: CGSize(width: 2456, height: 1600),
-          refreshHz: 60),
+          refreshHz: 120),
         bounds: bounds, requested: logical))
     XCTAssertFalse(
       DisplayReadback.matches(
         .init(
           logical: CGSize(width: 1228, height: 800), pixels: CGSize(width: 1228, height: 800),
-          refreshHz: 60),
+          refreshHz: 120),
         bounds: bounds, requested: logical))
     XCTAssertFalse(
       DisplayReadback.matches(
         .init(
           logical: CGSize(width: 2456, height: 1600), pixels: CGSize(width: 2456, height: 1600),
-          refreshHz: 60),
+          refreshHz: 120),
         bounds: bounds, requested: logical))
     XCTAssertFalse(
       DisplayReadback.matches(
         .init(
           logical: CGSize(width: 1228, height: 800), pixels: CGSize(width: 2456, height: 1600),
-          refreshHz: 59),
+          refreshHz: 119),
         bounds: bounds, requested: logical))
     let mapper = CoordinateMapper(bounds: bounds)
     XCTAssertEqual(mapper.point(x: 0, y: 0), CGPoint(x: -1228, y: 900))
@@ -1026,7 +871,7 @@ final class HostRuntimeTests: XCTestCase {
       DisplayReadback.matches(
         .init(
           logical: CGSize(width: 2456, height: 1600), pixels: CGSize(width: 2456, height: 1600),
-          refreshHz: 60),
+          refreshHz: 120),
         bounds: CGRect(x: 0, y: 0, width: 2456, height: 1600), requested: native))
   }
   func testClientMetricsModeMustRemainExact() throws {
@@ -1058,7 +903,7 @@ final class HostRuntimeTests: XCTestCase {
     defer { manager.destroy() }
     let display = try await manager.create(logicalSize: .native)
     XCTAssertEqual(display.logicalSize, .native)
-    XCTAssertEqual(display.refreshHz, 60, accuracy: 0.01)
+    XCTAssertEqual(display.refreshHz, 120, accuracy: 0.01)
   }
   @MainActor func testPhysicalHiDPIDisplayKeepsExactPixelBacking() async throws {
     guard ProcessInfo.processInfo.environment["MIRRI_PHYSICAL_DISPLAY_TEST"] == "1" else {
@@ -1069,7 +914,7 @@ final class HostRuntimeTests: XCTestCase {
     let display = try await manager.create(logicalSize: .retina)
     XCTAssertEqual(display.logicalSize, .retina)
     XCTAssertEqual(display.bounds.size, CGSize(width: 1228, height: 800))
-    XCTAssertEqual(display.refreshHz, 60, accuracy: 0.01)
+    XCTAssertEqual(display.refreshHz, 120, accuracy: 0.01)
   }
   func testSelectableDisplayModeRequiresLogicalPixelAndRateAgreement() {
     let native = HostPreferences.LogicalSize.native
@@ -1078,17 +923,17 @@ final class HostRuntimeTests: XCTestCase {
       DisplayReadback.matchesMode(
         .init(
           logical: CGSize(width: 2456, height: 1600), pixels: CGSize(width: 2456, height: 1600),
-          refreshHz: 60),
+          refreshHz: 120),
         requested: native))
     XCTAssertTrue(
       DisplayReadback.matchesMode(
         .init(
           logical: CGSize(width: 1228, height: 800), pixels: CGSize(width: 2456, height: 1600),
-          refreshHz: 60),
+          refreshHz: 120),
         requested: retina))
     for (width, height, pixelsWide, pixelsHigh, hz) in [
-      (1228, 800, 1228, 800, 60.0), (2456, 1600, 1228, 800, 60.0),
-      (2456, 1600, 2456, 1600, 59.0), (2456, 1600, 2456, 1600, 90.0),
+      (1228, 800, 1228, 800, 120.0), (2456, 1600, 1228, 800, 120.0),
+      (2456, 1600, 2456, 1600, 60.0), (2456, 1600, 2456, 1600, 90.0),
     ] {
       XCTAssertFalse(
         DisplayReadback.matchesMode(

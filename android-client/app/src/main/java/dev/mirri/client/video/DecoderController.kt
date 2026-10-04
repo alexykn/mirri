@@ -56,6 +56,9 @@ class DecoderController(
     private val active = AtomicBoolean(false)
     private val frameAges = DecoderFrameAges()
 
+    // Touched only on the decoder handler thread, like the codec itself.
+    private var pacer = PresentationPacer(0)
+
     internal fun drainFrameAges(): DecoderFrameAges.Summary = frameAges.drain()
 
     // One index per framework input buffer. Bounded; exhaustion is a codec
@@ -91,8 +94,10 @@ class DecoderController(
     suspend fun configure(
         choice: DecoderChoice,
         surface: Surface,
+        panelMilliHz: Long,
     ) = onOwner {
         check(codec == null)
+        pacer = PresentationPacer(panelMilliHz)
         val c = MediaCodec.createByCodecName(choice.name)
         try {
             active.set(true)
@@ -122,7 +127,15 @@ class DecoderController(
                         try {
                             if (info.size > 0) timing.outputAvailable(info.presentationTimeUs, System.nanoTime())
                             val releaseRequestNs = if (info.size > 0) System.nanoTime() else 0L
-                            codec.releaseOutputBuffer(index, info.size > 0)
+                            if (info.size > 0) {
+                                // Wire/media PTS is not an Android clock. Request the
+                                // next feasible presentation using local monotonic time,
+                                // at most one frame per panel refresh so SurfaceView does
+                                // not replace an older frame queued for the same vsync.
+                                codec.releaseOutputBuffer(index, pacer.next(releaseRequestNs))
+                            } else {
+                                codec.releaseOutputBuffer(index, false)
+                            }
                             if (info.size > 0) {
                                 val releaseReturnedNs = System.nanoTime()
                                 frameAges.released(info.presentationTimeUs, releaseReturnedNs)
@@ -272,6 +285,7 @@ class DecoderController(
             val c = codec ?: throw DecoderFailure("decoder stopped")
             indices.clear()
             frameAges.clearPending()
+            pacer.reset()
             c.flush()
             c.start()
         }

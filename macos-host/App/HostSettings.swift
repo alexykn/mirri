@@ -51,14 +51,15 @@ import MirriHostCore
     }
     set { store.set(min(80_000_000, max(25_000_000, newValue)), forKey: "hevcBitrate") }
   }
-  var rememberedSerial: String? {
-    get { store.string(forKey: "rememberedDevice") }
-    set { store.set(newValue, forKey: "rememberedDevice") }
+  var adaptiveBitrate: Bool {
+    get { store.object(forKey: "adaptiveBitrate") as? Bool ?? true }
+    set { store.set(newValue, forKey: "adaptiveBitrate") }
   }
   func preferences() -> HostPreferences {
     HostPreferences(
       codec: preferredCodec, logicalSize: logicalSize, zoom: zoom,
       auxiliaryAction: auxiliaryAction,
-      avcBitrate: avcBitrate, hevcBitrate: hevcBitrate, graceSeconds: grace)
+      avcBitrate: avcBitrate, hevcBitrate: hevcBitrate, graceSeconds: grace,
+      adaptiveBitrate: adaptiveBitrate)
   }
 }

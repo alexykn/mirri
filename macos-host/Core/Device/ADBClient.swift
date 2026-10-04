@@ -15,11 +15,16 @@ public struct InstalledClient: Sendable {
 }
 
 public struct NetworkLaunch: Sendable {
+  public enum Media: Sendable { case comparison, rtc }
   public let address: String
   public let pin: Data
-  public init(address: String, pin: Data) {
+  public let media: Media
+  public let sessionId: Data?
+  public init(address: String, pin: Data, media: Media = .comparison, sessionId: Data? = nil) {
     self.address = address
     self.pin = pin
+    self.media = media
+    self.sessionId = sessionId
   }
 }
 
@@ -149,158 +154,38 @@ public actor ADBClient {
     guard apk.isFileURL, apk.pathExtension == "apk" else { throw HostFailure.adb }
     _ = try await on(device, ["install", "-r", apk.path])
   }
-  public func reverseList(on device: ADBDevice) async throws -> String {
-    try await on(device, ["reverse", "--list"])
-  }
-  public func addReverse(remotePort: UInt16, localPort: UInt16, device: ADBDevice) async throws {
-    _ = try await on(device, ["reverse", "tcp:\(remotePort)", "tcp:\(localPort)"])
-  }
-  public func removeReverse(remotePort: UInt16, device: ADBDevice) async -> Bool {
-    (try? await on(device, ["reverse", "--remove", "tcp:\(remotePort)"])) != nil
-  }
   public func launchClient(
-    device: ADBDevice, token: Data, epoch: UInt32, network: NetworkLaunch? = nil
+    device: ADBDevice, token: Data, epoch: UInt32, network: NetworkLaunch
   ) async throws {
+    if network.media == .rtc, network.sessionId?.count != 16 {
+      throw HostFailure.unauthorized
+    }
     let hex = token.map { String(format: "%02x", $0) }.joined()
-    let mode = network == nil ? "usb" : "network"
     let networkExtras: [String] =
-      network.map { selected in
-        [
-          "--es", "mirri_host", selected.address,
-          "--es", "mirri_pin", selected.pin.map { String(format: "%02x", $0) }.joined(),
-        ]
-      } ?? []
+      [
+        "--es", "mirri_host", network.address,
+        "--es", "mirri_pin", network.pin.map { String(format: "%02x", $0) }.joined(),
+      ] + (network.media == .rtc ? [
+        "--es", "mirri_media", "rtc", "--es", "mirri_session_id",
+        network.sessionId!.map { String(format: "%02x", $0) }.joined(),
+      ] : [])
     _ = try await on(
       device,
       [
         // Force-stop only Mirri before each fresh host epoch (including grace
         // reconnect). An old foreground activity can retain its completed
         // controller and miss a new intent; -S starts a new process/activity.
-        // SessionCoordinator first closes old sockets/capture. The USB route
-        // separately retains its proved-owned reverse mappings; the network
-        // route never creates them. No other package or app data is reset.
+        // SessionCoordinator first closes old sockets/capture. No other
+        // package or app data is reset.
         "shell", "am", "start", "-S", "-n",
         "\(Self.package)/.MainActivity", "--es", "mirri_token", hex,
         "--ei", "mirri_control_port", "5561",
         "--ei", "mirri_video_port", "5560",
         "--ei", "mirri_protocol_major", "1",
-        "--ei", "mirri_epoch", String(epoch), "--es", "mirri_mode", mode,
+        "--ei", "mirri_epoch", String(epoch), "--es", "mirri_mode", "network",
       ] + networkExtras)
   }
   public func forceStopClient(device: ADBDevice) async {
     _ = try? await on(device, ["shell", "am", "force-stop", Self.package])
-  }
-}
-
-/// Each reverse mapping is removed only when the exact mapping was absent before creation.
-public actor AdbReverseManager {
-  private let adb: ADBClient
-  private var owned: [UInt16] = []
-  // ADB may create a mapping then time out before reporting success. Record
-  // both the absent precondition and the in-flight operation before awaiting;
-  // only the same live process/device may reconcile this pending lease.
-  private var pending: [UInt16] = []
-  private var adding: Task<Void, Error>?
-  private var removing = false
-  // Process-local identity only: never persist or log an ADB serial to guess
-  // ownership after a crash or another process replaces a mapping.
-  private var ownerSerial: String?
-  public init(adb: ADBClient) { self.adb = adb }
-  private static func mapping(_ port: UInt16, in list: String) -> String? {
-    list.split(separator: "\n").compactMap { line -> String? in
-      let columns = line.split(whereSeparator: \.isWhitespace).map(String.init)
-      guard columns.count == 3, columns[1] == "tcp:\(port)" else { return nil }
-      return columns[2]
-    }.first
-  }
-  public func install(on device: ADBDevice) async throws {
-    // A live reconnect must not tear down an already owned mapping while an
-    // existing client is still exiting. Recreate only ports actually lost by ADB.
-    guard !removing, adding == nil,
-      (owned.isEmpty && pending.isEmpty) || ownerSerial == device.serial
-    else { throw HostFailure.reverseConflict }
-    let list = try await adb.reverseList(on: device)
-    for port: UInt16 in [5560, 5561] {
-      let mapping = Self.mapping(port, in: list)
-      if pending.contains(port) {
-        if mapping == "tcp:\(port)" {
-          pending.removeAll { $0 == port }
-          if !owned.contains(port) { owned.append(port) }
-        } else if mapping == nil {
-          pending.removeAll { $0 == port }
-        } else {
-          throw HostFailure.reverseConflict
-        }
-      }
-      if owned.contains(port), mapping == "tcp:\(port)" { continue }
-      guard mapping == nil else { throw HostFailure.reverseConflict }
-      // Mapping vanished; the same live owner may install it again.
-      if owned.contains(port) {
-        owned.removeAll { $0 == port }
-      }
-      ownerSerial = device.serial
-      pending.append(port)
-      let operation = Task {
-        try await adb.addReverse(remotePort: port, localPort: port, device: device)
-      }
-      adding = operation
-      do {
-        try await operation.value
-        if pending.contains(port) {
-          pending.removeAll { $0 == port }
-          owned.append(port)
-        }
-        adding = nil
-        if removing { throw HostFailure.invalidState }
-      } catch {
-        adding = nil
-        // Keep the pending lease for release/retry. A failed command can have
-        // succeeded on-device; never discard the absent-before proof merely
-        // because the ADB response was lost. Do not delete a different target.
-        throw error
-      }
-    }
-  }
-  public func remove(on device: ADBDevice) async {
-    guard ownerSerial == device.serial else { return }
-    guard !removing else { return }
-    removing = true
-    defer { removing = false }
-    _ = await adding?.result  // A Stop racing the install must wait for the side effect.
-    let ports = Set(owned + pending)
-    guard let list = try? await adb.reverseList(on: device) else { return }
-    var unresolved: [UInt16] = []
-    for port in ports {
-      let mapping = Self.mapping(port, in: list)
-      if mapping == "tcp:\(port)" {
-        let removed = await adb.removeReverse(remotePort: port, device: device)
-        if !removed { unresolved.append(port) }
-      }
-      // Missing or reassigned mappings are not ours to remove.
-    }
-    owned = unresolved
-    pending.removeAll { ports.contains($0) }
-    if owned.isEmpty && pending.isEmpty { ownerSerial = nil }
-  }
-  /// Only the same live process may retry its own cleanup on USB rediscovery.
-  public func retryOwnedCleanup(on device: ADBDevice) async {
-    if ownerSerial == device.serial && (!owned.isEmpty || !pending.isEmpty) {
-      await remove(on: device)
-    }
-  }
-  /// Caller must obtain explicit owner confirmation. Never remove other ports
-  /// or ports pointing somewhere other than Mirri's fixed localhost listeners.
-  public func explicitCleanup(on device: ADBDevice) async throws {
-    let list = try await adb.reverseList(on: device)
-    for port: UInt16 in [5560, 5561] where Self.mapping(port, in: list) == "tcp:\(port)" {
-      guard await adb.removeReverse(remotePort: port, device: device) else {
-        throw HostFailure.adb
-      }
-    }
-    if ownerSerial == device.serial {
-      owned.removeAll()
-      pending.removeAll()
-      ownerSerial = nil
-    }
   }
 }

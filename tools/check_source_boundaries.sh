@@ -28,11 +28,11 @@ reject() {
   fi
 }
 reject 'host byte transport' macos-host/Core/Transport \
-  '\b(WireCodec|WireFramer|WireConnection|HostCommand|ClientEvent|NegotiatedConfig|Authenticator|ADBClient|AdbReverseManager)\b'
+  '\b(WireCodec|WireFramer|WireConnection|HostCommand|ClientEvent|NegotiatedConfig|Authenticator|ADBClient)\b'
 reject 'host capture/encode' macos-host/Core/Streaming \
   '\b(NegotiatedConfig|WireConnection|WireMessage|HostCommand|ClientEvent|LoopbackByteListener|BoundedByteListener|NetworkByteConnection|ADBClient|sessionId)\b'
 reject 'host session route isolation' macos-host/Core/Session/SessionCoordinator.swift \
-  '\b(ADBDevice|ADBClient|AdbReverseManager|LoopbackByteListener|BoundedByteListener|NetworkByteConnection)\b|^[[:space:]]*import[[:space:]]+Network\b'
+  '\b(ADBDevice|ADBClient|BoundedByteListener|NetworkByteConnection)\b|^[[:space:]]*import[[:space:]]+Network\b'
 reject 'Android byte transport' android-client/app/src/main/java/dev/mirri/client/transport \
   '^import dev\.mirri\.client\.(protocol|session|video)\b|\b(WireCodec|WireException|WireMessage|SessionMessages)\b'
 reject 'Android media services' android-client/app/src/main/java/dev/mirri/client/video \

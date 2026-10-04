@@ -8,6 +8,8 @@ public enum MessageKind: UInt16, Sendable {
   case startStream, stopSession, inputBatch, scroll, zoom, contextClick, shortcut
   case auxiliaryKey, ping, pong, clientMetrics, protocolError, decoderFailure
   case requestKeyframe, sessionRejected, stopAcknowledged
+  case rtcCapabilities, rtcPrepare, rtcPrepared, rtcOffer, rtcAnswer
+  case rtcIceCandidate, rtcIceEnd, rtcMediaReady, rtcStart
 }
 
 public struct PhysicalMode: Sendable, Equatable {
@@ -15,7 +17,9 @@ public struct PhysicalMode: Sendable, Equatable {
   public let height: UInt64
   public let milliHz: UInt64
   public let identifier: Int32
-  public var isExact: Bool { width == 1600 && height == 2456 && milliHz == 60000 }
+  public var isExact: Bool {
+    width == 1600 && height == 2456 && (milliHz == 60000 || milliHz == 120000)
+  }
 }
 
 public struct CodecOffer: Sendable {
@@ -100,7 +104,7 @@ public enum ClientEvent: Sendable {
   case ready(ClientReadiness)
   case input(RemoteInput)
   case metrics(ClientPerformance)
-  case pong(sequence: UInt64, sent: UInt64)
+  case pong(sequence: UInt64, sent: UInt64, received: UInt64, replied: UInt64)
   case decoderFailure
   case requestKeyframe
   case rejection
@@ -187,7 +191,9 @@ public enum ClientEvent: Sendable {
           decodeOutputFps: try SessionFields.real(f[5]), mode: try SessionFields.mode(f[6]),
           queueDepth: try SessionFields.number(f[7]), dropped: try SessionFields.number(f[8])))
     case .pong:
-      return .pong(sequence: try SessionFields.number(f[2]), sent: try SessionFields.number(f[3]))
+      return .pong(
+        sequence: try SessionFields.number(f[2]), sent: try SessionFields.number(f[3]),
+        received: try SessionFields.number(f[4]), replied: try SessionFields.number(f[5]))
     case .decoderFailure: return .decoderFailure
     case .requestKeyframe: return .requestKeyframe
     case .sessionRejected, .protocolError: return .rejection

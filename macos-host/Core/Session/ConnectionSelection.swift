@@ -1,12 +1,9 @@
 import Foundation
 
 /// Presentation-facing choice only; the connection route and coordinator still own every resource.
-public enum ConnectionMode: Sendable { case usb, network }
-
 public struct ConnectionTarget: Sendable, Equatable {
   public let device: ADBDevice
-  public let mode: ConnectionMode
-  public let address: LocalIPv4Address?
+  public let address: LocalIPv4Address
 }
 
 public enum ConnectionNotice: Sendable, Equatable {
@@ -26,7 +23,6 @@ public struct ConnectionSelection: Sendable {
   public private(set) var addresses: [LocalIPv4Address] = []
   public private(set) var selectedDevice: ADBDevice?
   public private(set) var selectedAddress: LocalIPv4Address?
-  public private(set) var mode: ConnectionMode = .usb
   public private(set) var snapshot = HostSnapshot()
   public private(set) var isStarting = false
   public private(set) var isMaintaining = false
@@ -62,8 +58,8 @@ public struct ConnectionSelection: Sendable {
       if !hasCheckedDevices { return "Checking for tablet…" }
       if devices.isEmpty { return "Connect your tablet" }
       if selectedDevice == nil { return "Choose a tablet" }
-      if mode == .network && addresses.isEmpty { return "Connect Mac to a network" }
-      if mode == .network && selectedAddress == nil { return "Choose network address" }
+      if addresses.isEmpty { return "Connect Mac to a network" }
+      if selectedAddress == nil { return "Choose network address" }
       return "Ready to connect"
     case .streaming: return "Connected"
     case .waitingForReconnect: return "Reconnecting…"
@@ -79,24 +75,19 @@ public struct ConnectionSelection: Sendable {
     if !hasCheckedDevices { return "Connect a USB cable and unlock the tablet." }
     if devices.isEmpty { return "Attach and authorize a USB tablet to begin." }
     if selectedDevice == nil { return "Choose the tablet you want to use." }
-    if mode == .network {
-      if addresses.isEmpty {
-        return "No active Mac IPv4 address. Connect both devices to a LAN or hotspot."
-      }
-      if selectedAddress == nil { return "Select the IPv4 interface on the same LAN or hotspot." }
+    if addresses.isEmpty {
+      return "No active Mac IPv4 address. Connect both devices to a LAN or hotspot."
     }
+    if selectedAddress == nil { return "Select the IPv4 interface on the same LAN or hotspot." }
     return nil
   }
 
   public var target: ConnectionTarget? {
     guard isEditable, !discoveryFailed, let selectedDevice,
-      devices.contains(selectedDevice)
+      devices.contains(selectedDevice),
+      let selectedAddress, addresses.contains(selectedAddress)
     else { return nil }
-    if mode == .network {
-      guard let selectedAddress, addresses.contains(selectedAddress) else { return nil }
-      return ConnectionTarget(device: selectedDevice, mode: .network, address: selectedAddress)
-    }
-    return ConnectionTarget(device: selectedDevice, mode: .usb, address: nil)
+    return ConnectionTarget(device: selectedDevice, address: selectedAddress)
   }
 
   public mutating func update(_ value: HostSnapshot) { snapshot = value }
@@ -132,10 +123,6 @@ public struct ConnectionSelection: Sendable {
   public mutating func select(_ address: LocalIPv4Address) {
     guard isEditable, addresses.contains(address) else { return }
     selectedAddress = address
-  }
-  public mutating func select(_ value: ConnectionMode) {
-    guard isEditable else { return }
-    mode = value
   }
 
   /// Atomic synchronous claim before starting any asynchronous ADB or coordinator work.

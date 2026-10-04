@@ -11,7 +11,7 @@ from pathlib import Path
 
 PATTERN = re.compile(
     r"\bmetrics capture ([\d.]+) fps .*?encode ([\d.]+) fps .*?"
-    r"USB ([\d.]+) fps ([\d.]+) Mbit/s \(depth (\d+)\) / .*?"
+    r"(?:USB|sent) ([\d.]+) fps ([\d.]+) Mbit/s \(depth (\d+)\) / .*?"
     r"decode ([\d.]+) → ([\d.]+) fps"
 )
 
@@ -24,7 +24,7 @@ def summarize(path: Path) -> None:
                 rates.append(tuple(map(float, match.groups())))
     if not rates:
         print(
-            "0 complete capture/encode/USB/decode intervals; no fps acceptance evidence"
+            "0 complete capture/encode/sent/decode intervals; no fps acceptance evidence"
         )
         return
     print(
@@ -32,10 +32,10 @@ def summarize(path: Path) -> None:
     )
     for index, label in enumerate(
         (
-            "capture fps",
+            "capture callback fps (includes idle)",
             "encode fps",
-            "USB send fps",
-            "USB Mbit/s",
+            "transport write fps",
+            "transport Mbit/s",
             "write depth",
             "decoder input fps",
             "decoder output fps",

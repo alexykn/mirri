@@ -1,5 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Native WebRTC NetworkMonitor queries the selected LAN interface. Normal app permission only. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <application android:label="Mirri" android:icon="@drawable/mirri_icon" android:usesCleartextTraffic="false">
         <!-- The host requires this tablet's exact landscape 2456x1600 display; Android 16 may ignore the orientation request. Runtime mode/surface validation rejects an incompatible surface. -->

@@ -3,7 +3,6 @@ package dev.mirri.client
 import dev.mirri.client.protocol.NetworkBootstrap
 import dev.mirri.client.protocol.WireException
 import dev.mirri.client.session.AttemptConnections
-import dev.mirri.client.session.BootstrapMode
 import dev.mirri.client.session.ClientLaunchBoundary
 import dev.mirri.client.transport.ByteConnection
 import dev.mirri.client.transport.PeerAuthenticationException
@@ -55,6 +54,24 @@ private class FragmentedBootstrapBytes(
 class NetworkBootstrapTest {
     private val token = ByteArray(32) { 0x42 }
 
+    @Test fun rtcSelectionRequiresExactBootstrappedSessionId() {
+        val hex = "ab".repeat(32)
+        val pin = "cd".repeat(32)
+
+        fun selected(
+            media: String?,
+            id: String?,
+        ) = ClientLaunchBoundary.validated(hex, 1, 5561, 5560, 1, "network", "192.0.2.15", pin, media, id)
+        assertEquals(null, selected("rtc", null))
+        assertEquals(null, selected("rtc", "ab".repeat(15)))
+        assertEquals(null, selected("RTC", "ab".repeat(16)))
+        assertEquals(null, selected(null, "ab".repeat(16)))
+        val rtc = selected("rtc", "ab".repeat(16))!!
+        assertEquals(dev.mirri.client.session.NetworkMedia.RTC, rtc.media)
+        assertArrayEquals(ByteArray(16) { 0xab.toByte() }, rtc.sessionId)
+        assertEquals(dev.mirri.client.session.NetworkMedia.COMPARISON, selected(null, null)?.media)
+    }
+
     @Test fun fixedRequestAndFragmentedResponseYieldHostEpoch() {
         val bytes = FragmentedBootstrapBytes(byteArrayOf(0x4d, 0x52, 0x4e, 0x42, 0, 1, 0, 0, 0, 0, 0, 7))
         assertEquals(7u, NetworkBootstrap.exchange(bytes, token))
@@ -76,7 +93,6 @@ class NetworkBootstrapTest {
         val hex = "ab".repeat(32)
         val pin = "cd".repeat(32)
         val valid = ClientLaunchBoundary.validated(hex, 1, 5561, 5560, 1, "network", "192.0.2.15", pin)
-        assertEquals(BootstrapMode.NETWORK, valid?.mode)
         assertEquals("192.0.2.15", valid?.endpoint?.host)
         assertNull(ClientLaunchBoundary.validated(hex, 1, 5561, 5560, 1, "usb", "192.0.2.15", pin))
         assertNull(ClientLaunchBoundary.validated(hex, 1, 5561, 5560, 1, "network", "127.0.0.1", pin))

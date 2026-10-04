@@ -178,7 +178,8 @@ and requires the next configuration to increment it by one.
 SessionConfig MUST specify 2456x1600, 60000 mHz, color=1, videoPort=5560,
 inputMode=1, bitrate AVC 20..80 Mbit/s (initial 40 Mbit/s) or HEVC 25..80
 Mbit/s, hardware-backed profile/level supported on *both* endpoints.
-Client physical mode is 1600x2456 at 60000 mHz; modeId is local diagnostic
+Client physical mode is 1600x2456 at 60000 or 120000 mHz (panel refresh only;
+the stream stays 60000 mHz); modeId is local diagnostic
 only. ClientReady MUST reflect a readback of the active mode, actual surface
 2456x1600, and decoder configured on that surface. No codec fallback, scaling,
 HDR, or software conversion is implied by capability advertisement. If exact

@@ -6,17 +6,13 @@ import SystemConfiguration
 @MainActor final class ConnectionPanelModel: ObservableObject {
   @Published private(set) var selection = ConnectionSelection()
   @Published private(set) var preferences = HostPreferences()
-  @Published private(set) var remembersTablet = false
   @Published var height: CGFloat = 475
-  var onMode: ((ConnectionMode) -> Void)?
   var onDevice: ((ADBDevice) -> Void)?
   var onAddress: ((LocalIPv4Address) -> Void)?
   var onConnect: (() -> Void)?
   var onStop: (() -> Void)?
   var onRetry: (() -> Void)?
-  var onRemember: (() -> Void)?
   var onInstall: (() -> Void)?
-  var onCleanup: (() -> Void)?
   var onLogs: (() -> Void)?
   var onCodec: ((HostPreferences.Codec) -> Void)?
   var onSize: ((HostPreferences.LogicalSize) -> Void)?
@@ -25,13 +21,11 @@ import SystemConfiguration
   var onAVC: ((UInt32) -> Void)?
   var onHEVC: ((UInt32) -> Void)?
   var onGrace: ((Int) -> Void)?
+  var onAdaptive: ((Bool) -> Void)?
 
   func render(_ selection: ConnectionSelection, settings: HostSettings) {
     self.selection = selection
     preferences = settings.preferences()
-    remembersTablet =
-      settings.rememberedSerial == selection.selectedDevice?.serial
-      && selection.selectedDevice != nil
   }
 
   func addressLabel(_ address: LocalIPv4Address) -> String {
@@ -51,13 +45,12 @@ import SystemConfiguration
     if let notice = selection.notice { return notice.message }
     if selection.isMaintaining { return "Waiting for the selected USB tablet…" }
     if selection.isStarting && selection.snapshot.state == .idle {
-      return selection.mode == .usb
-        ? "Preparing USB connection…" : "Preparing secure network connection…"
+      return "Preparing secure network connection…"
     }
     if selection.snapshot.state == .failed { return selection.snapshot.message }
     if let help = selection.readinessHelp { return help }
     let snapshot = selection.snapshot
-    if snapshot.state == .idle { return "Choose how to connect, then press Connect." }
+    if snapshot.state == .idle { return "Choose a tablet and Mac address, then press Connect." }
     if snapshot.state == .streaming { return snapshot.device }
     return snapshot.message
   }
@@ -77,14 +70,10 @@ private struct ConnectionPanel: View {
         VStack(alignment: .leading, spacing: 13) {
           header
           Divider()
-          connectionChoices
-          Divider()
           deviceChoice
-          if selection.mode == .network { networkChoice }
+          networkChoice
           Text(
-            selection.mode == .usb
-              ? "USB stays attached while streaming. Unlock the tablet and allow USB debugging."
-              : "Share a Wi-Fi LAN or tablet hotspot. USB is needed to start; after Connected you may unplug it. Not Wi-Fi Direct."
+            "Share a Wi-Fi LAN or tablet hotspot. USB is needed to start; after Connected you may unplug it. Not Wi-Fi Direct."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -156,39 +145,6 @@ private struct ConnectionPanel: View {
       }
       Spacer(minLength: 0)
     }
-  }
-
-  private var connectionChoices: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text("CONNECTION").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-      HStack(spacing: 8) {
-        modeButton(.usb, title: "USB", symbol: "cable.connector")
-        modeButton(.network, title: "Network", symbol: "wifi")
-      }
-    }
-  }
-
-  private func modeButton(_ mode: ConnectionMode, title: String, symbol: String) -> some View {
-    Button {
-      model.onMode?(mode)
-    } label: {
-      HStack(spacing: 7) {
-        Image(systemName: symbol)
-        Text(title)
-        Spacer(minLength: 0)
-        if selection.mode == mode { Image(systemName: "checkmark").font(.caption.bold()) }
-      }
-      .frame(maxWidth: .infinity)
-      .padding(.horizontal, 10)
-      .padding(.vertical, 9)
-      .background(
-        selection.mode == mode ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.08),
-        in: RoundedRectangle(cornerRadius: 9))
-    }
-    .buttonStyle(.plain)
-    .disabled(!selection.isEditable)
-    .accessibilityLabel("\(title) connection")
-    .accessibilityAddTraits(selection.mode == mode ? [.isSelected] : [])
   }
 
   private var deviceChoice: some View {
@@ -340,6 +296,10 @@ private struct ConnectionPanel: View {
           Text("\(n) Mbit/s").tag(UInt32(n * 1_000_000))
         }
       }
+      Toggle(
+        "Adaptive bitrate (WebRTC)",
+        isOn: Binding(
+          get: { model.preferences.adaptiveBitrate }, set: { model.onAdaptive?($0) }))
       Picker(
         "Reconnect grace",
         selection: Binding(
@@ -354,16 +314,7 @@ private struct ConnectionPanel: View {
 
   private var advanced: some View {
     VStack(alignment: .leading, spacing: 7) {
-      Button(
-        model.remembersTablet
-          ? "Forget automatic USB connection" : "Remember tablet for USB auto-connect"
-      ) {
-        model.onRemember?()
-      }
-      .disabled(!selection.isEditable || selection.selectedDevice == nil)
       Button("Install or upgrade client APK…") { model.onInstall?() }
-        .disabled(!selection.isEditable || selection.selectedDevice == nil)
-      Button("Clean up USB reverse ports…") { model.onCleanup?() }
         .disabled(!selection.isEditable || selection.selectedDevice == nil)
     }
     .buttonStyle(.link)

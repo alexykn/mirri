@@ -120,7 +120,7 @@ final class NetworkBootstrapTests: XCTestCase {
       listener.close()
     }
   }
-  func testNetworkRetryDoesNotRelaunchADBOrCreateReverseMappings() async throws {
+  func testNetworkRetryDoesNotRelaunchADBOrUseReverseMappings() async throws {
     guard let address = LocalIPv4Address.available().first else {
       throw XCTSkip("No assigned non-loopback IPv4 address for a real listener")
     }
@@ -161,7 +161,7 @@ final class NetworkBootstrapTests: XCTestCase {
     let log = try String(contentsOf: calls, encoding: .utf8)
     XCTAssertEqual(log.components(separatedBy: " am start ").count - 1, 1)
     XCTAssertFalse(log.contains(" reverse "))
-    let next = try await service.route(on: device)
+    let next = try await service.networkRoute(on: device, address: address)
     await next.close()
   }
   func testNetworkStopJoinsInFlightFirstLaunchBeforeReleasingService() async throws {
@@ -203,7 +203,7 @@ final class NetworkBootstrapTests: XCTestCase {
     XCTAssertTrue(FileManager.default.fileExists(atPath: entered.path))
     let closing = Task { await route.close() }
     do {
-      _ = try await service.route(on: device)
+      _ = try await service.networkRoute(on: device, address: address)
       XCTFail("pending network launch still owns the service route")
     } catch {
       XCTAssertEqual(error as? HostFailure, .invalidState)
@@ -216,7 +216,7 @@ final class NetworkBootstrapTests: XCTestCase {
     } catch {
       XCTAssertEqual(error as? HostFailure, .invalidState)
     }
-    let next = try await service.route(on: device)
+    let next = try await service.networkRoute(on: device, address: address)
     await next.close()
   }
 }

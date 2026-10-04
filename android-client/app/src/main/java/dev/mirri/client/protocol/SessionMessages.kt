@@ -26,6 +26,15 @@ enum class MessageType(
     REQUEST_KEYFRAME(20),
     REJECTED(21),
     STOP_ACK(22),
+    RTC_CAPABILITIES(23),
+    RTC_PREPARE(24),
+    RTC_PREPARED(25),
+    RTC_OFFER(26),
+    RTC_ANSWER(27),
+    RTC_ICE_CANDIDATE(28),
+    RTC_ICE_END(29),
+    RTC_MEDIA_READY(30),
+    RTC_START(31),
 }
 
 enum class VideoCodecId(
@@ -47,7 +56,7 @@ data class PhysicalMode(
     val milliHz: Long,
     val identifier: Int,
 ) {
-    val isExact: Boolean get() = width == 1600L && height == 2456L && milliHz == 60000L
+    val isExact: Boolean get() = width == 1600L && height == 2456L && (milliHz == 60000L || milliHz == 120000L)
 }
 
 data class CodecOffer(
@@ -355,6 +364,10 @@ sealed interface ClientCommand {
         val code: Int,
     ) : ClientCommand
 
+    data class ProtocolFailure(
+        val code: Int,
+    ) : ClientCommand
+
     data class Keyframe(
         val generation: UInt,
     ) : ClientCommand
@@ -456,6 +469,7 @@ sealed interface ClientCommand {
                         listOf(mode(mode), Value.Text(decoderName), Value.Object(listOf(n(2456), n(1600))))
                 is Rejection -> MessageType.REJECTED to listOf(n(reason.toLong()), Value.Text(text))
                 is Failure -> MessageType.DECODER_FAILURE to listOf(n(code.toLong()))
+                is ProtocolFailure -> MessageType.ERROR to listOf(n(code.toLong()), Value.Text("RTC attempt rejected"), n(1))
                 is Keyframe -> MessageType.REQUEST_KEYFRAME to listOf(n(generation.toLong()))
                 is Pong -> MessageType.PONG to listOf(n(sequence.toLong()), n(sent.toLong()), n(received), n(replied))
                 is Metrics ->

@@ -27,6 +27,19 @@ validated on a tablet; see [network setup and limits](docs/network-streaming.md)
 The debug APK is not a release package; never install or upgrade it on a
 tablet without the owner's explicit decision.
 
+An opt-in WebRTC test route (`--rtc-test-route`, USB credential bootstrap and
+pinned TLS control) has separately established selected UDP, hardware H.264
+High 5.2 at 2456×1600 and exact-size hardware decoding on the authorized
+TXZ-W09. The Android timed-control-receive cancellation race that dropped
+authenticated Pings was corrected with an atomic receive/timeout selection.
+A same-tablet 300-second owned-display synthetic trial then stayed Connected
+through 18,017 stimulus ticks and 12,682 hardware-encoded frames; explicit
+Stop and reconnect also passed. This proves that bounded physical reliability
+trial, **not** 60 fps (roughly 42 fps achieved), latency or visual-quality
+parity, 30-minute endurance, or unplugged Wi-Fi behavior. The existing USB
+and TCP routes remain intact.
+See [WebRTC architecture and observed gates](docs/webrtc-architecture.md).
+
 [`protocol/protocol.md`](protocol/protocol.md) is the normative wire contract;
 `protocol/fixtures/` contains 24 deterministic complete framed messages: all
 22 registered message types plus hardware-HEVC enum/configuration examples.
@@ -46,18 +59,20 @@ flow, error handling, verification strategy and delivery milestones are in
 - persisted native 2456×1600 or 1228×800 logical HiDPI preference, both
   strictly read back at 2456×1600 backing/60 Hz before streaming;
 - 60 Hz virtual-display mode and 60 fps stream target;
-- USB transport through two localhost TCP channels carried by `adb reverse`;
+- network transport over pinned TLS on a selected local IPv4 address; USB/ADB is
+  setup tooling only (install, first launch, logcat) and carries no media;
 - hardware AVC initially, with negotiated hardware HEVC support;
 - direct one-finger pointing, tapping and dragging;
 - long-press and two-finger-tap context click;
 - two-finger scrolling and configurable pinch-to-zoom behavior;
 - optional M-Pencil position, pressure, tilt and auxiliary-button forwarding;
 - bounded latency, explicit backpressure and per-stage performance metrics;
-- automatic recovery from an Android activity restart or temporary USB
-  disconnect.
+- automatic recovery from an Android activity restart or temporary network
+  interruption.
 
-The first-release target remains USB. Opt-in network transport is a separate
-USB-bootstrap preview, not Wi-Fi Direct. Audio, HDR, portrait operation,
+USB streaming (`adb reverse` loopback route) was removed on 2026-10-04; sections
+below that describe USB video or reverse mappings are historical. Network
+transport is USB-bootstrapped, not Wi-Fi Direct. Audio, HDR, portrait operation,
 Bluetooth tablet mode and general support for unrelated Android devices are
 not part of the first release.
 
@@ -325,13 +340,76 @@ not release-ready claims. Short-window ≥59 fps is measured, but the earlier
    precise touch paths. Mark each gate pass/fail with actual values; if a gate
    is not measured, report **unverified**, not passed.
 
+## Terminal control (macOS)
+
+`mirri` drives the running host app over a user-only Unix socket in
+`~/Library/Application Support/Mirri/`; the app stays the only session owner.
+Install it once with `bash tools/install_cli.sh` (links into `~/.local/bin`,
+override with `MIRRI_CLI_DIR`).
+
+```sh
+mirri status                      # state, modes and metrics (--json for raw)
+mirri devices                     # attached tablets
+mirri addresses                   # Mac IPv4 addresses
+mirri connect --address en0       # WebRTC video over UDP; waits until streaming
+mirri connect --address en0 --media tcp   # TLS/TCP comparison path
+mirri disconnect
+mirri reconnect
+mirri set --codec avc --avc-bitrate 20 --size retina
+mirri set --adaptive-bitrate off  # WebRTC: pin the bitrate to --avc-bitrate
+mirri install path/to/app-debug.apk
+mirri watch                       # one state/metrics line per second
+mirri logs | launch | show | quit
+```
+
+`connect` launches the app if needed (`MIRRI_HOST_APP` overrides
+`~/Applications/Mirri Development.app`) and needs one authorized USB debugging
+device for setup. `--address` and `--device` may be omitted only when there is
+exactly one choice. Failures and timeouts exit nonzero; usage errors exit 2.
+
 ## Privacy and permissions
 
 The macOS host requires Screen Recording and Accessibility permission.
 The Android client does not require storage or Android Accessibility access.
-For USB operation, host listeners bind to loopback only and are
-reachable from the tablet through host-owned fixed-port `adb reverse` mappings;
-the ephemeral launch token authenticates each connection.
+
+### Local development signing
+
+Before installing an updated host, sign the **complete staged app bundle** with
+the same certificate-backed identity used by the previous installation:
+
+```sh
+bash tools/sign_development.sh /path/to/staged/MirriHost.app
+```
+
+The default identity is `Mirri Local Development` in the current user's keychain.
+Set `MIRRI_SIGN_IDENTITY` to use another existing code-signing identity. The helper
+fails if that identity is missing; it never falls back to ad-hoc signing. On a new
+development machine, create a local Code Signing identity in Keychain Access
+before using it. Retain that identity across builds; do not generate a new one
+for each update. A local self-signed identity does not make the app notarized or
+suitable for distribution, and does not need to be installed as a trusted system
+root for local signing.
+
+After signing, the displayed designated requirement must bind the bundle
+identifier to the certificate, not to a build-specific `cdhash`. Install that
+verified bundle at the same path and do not modify it afterward. Unsigned Xcode
+test products and `codesign --sign -` builds are not stable permission identities.
+Changing from an old ad-hoc identity to the certificate-backed identity requires
+one new Screen Recording and Accessibility approval. If macOS retains stale
+entries, quit Mirri and reset **only** its affected services:
+
+```sh
+tccutil reset ScreenCapture dev.mirri.host
+tccutil reset Accessibility dev.mirri.host
+```
+
+Then open the same signed app, grant the requested permissions, and restart it
+if macOS asks. Do not repeatedly toggle settings or rebuild between approval
+and restart. Matching code-signing requirements support permission continuity;
+physical update verification is still required before claiming it works.
+
+USB is used only to install and launch the client with its ephemeral token and
+TLS pin; host listeners bind to the selected IPv4 address with pinned TLS.
 
 Mirri does not persist video frames or precise input paths. Logs contain
 bounded operational metrics and errors, not screen content or device serials.

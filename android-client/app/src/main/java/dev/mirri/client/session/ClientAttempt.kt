@@ -3,6 +3,7 @@ package dev.mirri.client.session
 import dev.mirri.client.protocol.ControlChannel
 import dev.mirri.client.protocol.VideoChannel
 import dev.mirri.client.video.DecoderController
+import dev.mirri.client.video.RtcReceiver
 import dev.mirri.client.video.VideoTimingOwner
 import kotlinx.coroutines.channels.Channel
 import java.util.concurrent.atomic.AtomicBoolean
@@ -18,11 +19,15 @@ internal class ClientAttempt {
     @Volatile var video: VideoChannel? = null
 
     @Volatile var decoder: DecoderController? = null
+
+    @Volatile var rtc: RtcReceiver? = null
     var id: ByteArray? = null
     var epoch = 0u
     var generation = 0u
 
     @Volatile var streaming = false
+
+    @Volatile var rtcHelloSent = false
 
     @Volatile var active = true
     var inputBatchSequence = 0uL
@@ -65,7 +70,12 @@ internal class ClientAttempt {
                 decoder?.stop()
             } finally {
                 decoder = null
-                timing.close()
+                try {
+                    rtc?.close()
+                } finally {
+                    rtc = null
+                    timing.close()
+                }
             }
         }
     }

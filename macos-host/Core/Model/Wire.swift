@@ -24,7 +24,9 @@ public struct WireMessage: Equatable, Sendable {
   }
 }
 
-public enum WireFailure: Error, Sendable { case malformed, unsupported, tooLarge, incomplete }
+public enum WireFailure: Error, Sendable, Equatable {
+  case malformed, unsupported, tooLarge, incomplete
+}
 
 public enum WireCodec {
   // Ordered wire schema; public domain message fields are WireValue trees.
@@ -42,6 +44,13 @@ public enum WireCodec {
     15: "u64 u64 u64 u64", 16: "u64 u64 u64 u64",
     17: "fps u32 fps fps mode u8 u64", 18: "errorCode str128 bool",
     19: "errorCode", 20: "generation", 21: "rejectReason str128", 22: "",
+    23: "rtcVersion bytes16 codec rtcProfile rtcLevel bool bool",
+    24: "rtcVersion bytes16 bytes16 codec rtcProfile rtcLevel size u32 color",
+    25: "rtcVersion bytes16 mode size str96",
+    26: "rtcVersion bytes16 utf8sdp", 27: "rtcVersion bytes16 utf8sdp",
+    28: "rtcVersion bytes16 str32 u16 utf8candidate",
+    29: "rtcVersion bytes16 str32 u16",
+    30: "rtcVersion bytes16", 31: "rtcVersion bytes16",
   ]
   private static func schema(_ type: UInt16) throws -> [String] {
     guard let spec = definitions[type] else { throw WireFailure.unsupported }
@@ -49,7 +58,18 @@ public enum WireCodec {
       String.init)
   }
   private static func cap(_ type: UInt16) -> Int {
-    type == 6 ? 16_777_261 : (type == 4 || type == 5 ? 65_536 : 1_048_576)
+    switch type {
+    case 23: 43
+    case 24: 70
+    case 25: 160
+    case 26, 27: 32_808
+    case 28: 2_124
+    case 29: 74
+    case 30, 31: 38
+    case 6: 16_777_261
+    case 4, 5: 65_536
+    default: 1_048_576
+    }
   }
   private static func checked(_ value: UInt64, _ range: ClosedRange<UInt64>) throws {
     guard range.contains(value) else { throw WireFailure.malformed }
@@ -69,8 +89,9 @@ public enum WireCodec {
   }
   private static func exactPhysicalMode(_ value: WireValue) throws -> Bool {
     let fields = try object(value)
+    // Panel refresh only: 60 Hz, or 120 Hz showing the 60 fps stream on finer vsync slots.
     return try fields.count == 3 && size(fields[0]) == (1600, 2456)
-      && integer(fields[1]) == 60000
+      && [60000, 120000].contains(integer(fields[1]))
   }
   private static func validate(_ message: WireMessage) throws {
     let f = message.fields
@@ -108,12 +129,39 @@ public enum WireCodec {
       guard case .bytes(let au) = f[6], au.count >= 5,
         au.starts(with: [0, 0, 0, 1])
       else { throw WireFailure.malformed }
+    case 23...31:
+      guard try integer(f[2]) == 1 else { throw WireFailure.unsupported }
+      if message.type == 23 || message.type == 24 {
+        let index = message.type == 23 ? 4 : 5
+        guard (try integer(f[index])) == 1, (try integer(f[index + 1])) == 2,
+          (51...52).contains(try integer(f[index + 2]))
+        else { throw WireFailure.malformed }
+      }
+      if message.type == 24 {
+        guard (try size(f[8])) == (2456, 1600), (try integer(f[9])) == 60000
+        else { throw WireFailure.malformed }
+      }
+      if message.type == 25 {
+        guard try exactPhysicalMode(f[4]), (try size(f[5])) == (2456, 1600)
+        else { throw WireFailure.malformed }
+      }
+      if message.type == 28 || message.type == 29 {
+        guard try integer(f[5]) == 0, case .text(let mid) = f[4], !mid.isEmpty
+        else { throw WireFailure.malformed }
+      }
+      if message.type == 28 {
+        guard case .text(let candidate) = f[6], candidate.hasPrefix("candidate:")
+        else { throw WireFailure.malformed }
+      }
     default: break
     }
   }
   private static func range(_ type: String) -> ClosedRange<UInt64>? {
     switch type {
     case "bool": return 0...1
+    case "rtcVersion": return 1...1
+    case "rtcProfile": return 2...2
+    case "rtcLevel": return 51...52
     case "codec": return 1...2
     case "profile": return 1...2
     case "color", "inputMode": return 1...1
@@ -138,7 +186,7 @@ public enum WireCodec {
     if t == "u32" || t == "epoch" || t == "generation" || t == "dimension" || t == "refresh" {
       return 4
     }
-    if t == "level" || t == "port" || t == "buttons" { return 2 }
+    if t == "level" || t == "port" || t == "buttons" || t == "u16" || t == "rtcVersion" { return 2 }
     return 1
   }
   private static func children(_ t: String) -> [String]? {
@@ -181,6 +229,7 @@ public enum WireCodec {
     case "str64": 64
     case "str96": 96
     case "str128": 128
+    case "str32": 32
     default: nil
     }
   }
@@ -197,6 +246,16 @@ public enum WireCodec {
   private static func append(_ n: UInt64, width: Int, to data: inout Data) {
     for index in (0..<width).reversed() { data.append(UInt8(truncatingIfNeeded: n >> (index * 8))) }
   }
+  private static func rtcText(_ value: String, type: String) throws -> Data {
+    let data = Data(value.utf8)
+    let max = type == "utf8sdp" ? 32768 : 2048
+    guard !data.isEmpty, data.count <= max, !value.unicodeScalars.contains(where: { scalar in
+      scalar == "\u{FEFF}" || scalar == "\0" || (scalar.value < 32 &&
+        !(type == "utf8sdp" && (scalar == "\r" || scalar == "\n"))) ||
+        (0x7f...0x9f).contains(scalar.value)
+    }) else { throw WireFailure.malformed }
+    return data
+  }
   private static func encodeScalar(_ value: WireValue, _ type: String, _ out: inout Data) throws {
     if type == "i32" {
       guard case .signed(let n) = value else { throw WireFailure.malformed }
@@ -211,6 +270,7 @@ public enum WireCodec {
     }
     guard case .integer(let n) = value else { throw WireFailure.malformed }
     let w = width(type)
+    if type == "rtcVersion" && n != 1 { throw WireFailure.unsupported }
     guard n <= (w == 8 ? UInt64.max : (UInt64(1) << (w * 8)) - 1) else {
       throw WireFailure.malformed
     }
@@ -223,6 +283,13 @@ public enum WireCodec {
   private static func encodeTextOrBytes(_ value: WireValue, _ type: String, _ out: inout Data)
     throws
   {
+    if type == "utf8sdp" || type == "utf8candidate" {
+      guard case .text(let text) = value else { throw WireFailure.malformed }
+      let data = try rtcText(text, type: type)
+      append(UInt64(data.count), width: 2, to: &out)
+      out.append(data)
+      return
+    }
     if let max = stringLimit(type) {
       guard case .text(let s) = value else { throw WireFailure.malformed }
       let d = try validText(s, max)
@@ -257,7 +324,7 @@ public enum WireCodec {
     // Composite schemas, textual/blob payloads and fixed-width scalars have distinct bounds.
     if type == "bytes16" || type == "bytes32" || type == "param" || type == "au" {
       try encodeTextOrBytes(value, type, &out)
-    } else if stringLimit(type) != nil {
+    } else if stringLimit(type) != nil || type == "utf8sdp" || type == "utf8candidate" {
       try encodeTextOrBytes(value, type, &out)
     } else {
       try encodeScalar(value, type, &out)
@@ -278,6 +345,15 @@ public enum WireCodec {
       return result
     }
     mutating func decodeTextOrBytes(_ type: String) throws -> WireValue {
+      if type == "utf8sdp" || type == "utf8candidate" {
+        let length = Int(try number(2))
+        guard length > 0, length <= (type == "utf8sdp" ? 32768 : 2048),
+          let text = String(data: try take(length), encoding: .utf8) else {
+          throw WireFailure.malformed
+        }
+        _ = try WireCodec.rtcText(text, type: type)
+        return .text(text)
+      }
       if let max = WireCodec.stringLimit(type) {
         let length = Int(try number(2))
         guard length <= max else { throw WireFailure.malformed }
@@ -309,11 +385,12 @@ public enum WireCodec {
         try WireCodec.finite(n, type)
         return .real(n)
       }
-      if WireCodec.stringLimit(type) != nil || ["bytes16", "bytes32", "param", "au"].contains(type)
+      if WireCodec.stringLimit(type) != nil || ["bytes16", "bytes32", "param", "au", "utf8sdp", "utf8candidate"].contains(type)
       {
         return try decodeTextOrBytes(type)
       }
       let n = try number(WireCodec.width(type))
+      if type == "rtcVersion" && n != 1 { throw WireFailure.unsupported }
       if let bounds = WireCodec.range(type) { try WireCodec.checked(n, bounds) }
       if type == "dimension" { try WireCodec.checked(n, 1...8192) }
       if type == "refresh" { try WireCodec.checked(n, 1...240_000) }

@@ -12,9 +12,8 @@ import UniformTypeIdentifiers
   private var pendingStart: Task<Void, Never>?
   private var sleepStop: Task<Void, Never>?
   private var selection = ConnectionSelection()
-  private var autoAttemptedSerial: String?
-  private var allowsAutomaticConnection = !ProcessInfo.processInfo.arguments.contains(
-    "--no-auto-connect")
+  private var control: ControlServer?
+  private var activeRtc = false
   func applicationDidFinishLaunching(_ notification: Notification) {
     coordinator = SessionCoordinator(
       permissions: { [permissions] in permissions.ready() },
@@ -41,46 +40,32 @@ import UniformTypeIdentifiers
     if ProcessInfo.processInfo.arguments.contains("--show-connection") {
       menu.showWhenReady()
     }
+    let server = ControlServer { [weak self] request in
+      await self?.control(request) ?? Data(#"{"ok":false,"error":"Mirri is quitting"}"#.utf8)
+    }
+    if server.start() { control = server }
   }
   private func configureConnectionActions() {
-    menu.panel.onMode = { [weak self] mode in
-      guard let self else { return }
-      allowsAutomaticConnection = false
-      selection.select(mode)
-      render()
-    }
     menu.panel.onDevice = { [weak self] device in
       guard let self else { return }
-      allowsAutomaticConnection = false
       selection.select(device)
       render()
     }
     menu.panel.onAddress = { [weak self] address in
       guard let self else { return }
-      allowsAutomaticConnection = false
       selection.select(address)
       render()
     }
     menu.panel.onConnect = { [weak self] in
-      self?.allowsAutomaticConnection = false
-      self?.connect()
+      // WebRTC over UDP is the default; the TCP/TLS video path stays for comparison.
+      self?.connect(rtc: !ProcessInfo.processInfo.arguments.contains("--tcp-video"))
     }
     menu.panel.onStop = { [weak self] in
       guard let self else { return }
       Task { await self.stopSession() }
     }
-    menu.panel.onRetry = { [weak self] in
-      guard let self else { return }
-      Task { await self.coordinator.reconnect() }
-    }
-    menu.panel.onRemember = { [weak self] in
-      guard let self, selection.isEditable, let device = selection.selectedDevice else { return }
-      allowsAutomaticConnection = false  // Remembering takes effect on a later launch.
-      settings.rememberedSerial = settings.rememberedSerial == device.serial ? nil : device.serial
-      render()
-    }
+    menu.panel.onRetry = { [weak self] in self?.reconnect() }
     menu.panel.onInstall = { [weak self] in self?.install() }
-    menu.panel.onCleanup = { [weak self] in self?.cleanupReverse() }
   }
   private func configureSettingsActions() {
     menu.panel.onCodec = { [weak self] in
@@ -113,6 +98,11 @@ import UniformTypeIdentifiers
       settings.hevcBitrate = $0
       render()
     }
+    menu.panel.onAdaptive = { [weak self] in
+      guard let self else { return }
+      settings.adaptiveBitrate = $0
+      render()
+    }
     menu.panel.onGrace = { [weak self] in
       guard let self else { return }
       settings.grace = $0
@@ -136,26 +126,19 @@ import UniformTypeIdentifiers
     guard selection.isEditable else { return }
     selection.discovered(result)
     render()
-    guard case .success(let discovered) = result else { return }
-    if let attempted = autoAttemptedSerial,
-      !discovered.contains(where: { $0.serial == attempted })
-    {
-      autoAttemptedSerial = nil
-    }
-    if let remembered = settings.rememberedSerial,
-      let candidate = discovered.first(where: { $0.serial == remembered }),
-      autoAttemptedSerial != candidate.serial,
-      allowsAutomaticConnection, pendingStart == nil,
-      selection.mode == .usb, selection.snapshot.state == .idle
-    {
-      selection.select(candidate)
-      render()
-      autoAttemptedSerial = candidate.serial
-      connect()
+  }
+  /// A WebRTC session has no in-session reconnect: the tablet treats a lost
+  /// peer as terminal. Stop and start it again with the same choices instead.
+  private func reconnect() {
+    Task {
+      guard activeRtc else { return await coordinator.reconnect() }
+      await stopSession()
+      connect(rtc: true)
     }
   }
-  private func connect() {
+  private func connect(rtc: Bool) {
     guard pendingStart == nil, let target = selection.claimConnect() else { return }
+    activeRtc = rtc
     render()
     pendingStart = Task { [weak self] in
       guard let self else { return }
@@ -167,11 +150,11 @@ import UniformTypeIdentifiers
       }
       do {
         let route: any HostConnectionRoute
-        if let address = target.address {
-          try address.validateCurrent()
-          route = try await devices.networkRoute(on: target.device, address: address)
+        try target.address.validateCurrent()
+        if rtc {
+          route = try await devices.rtcRoute(on: target.device, address: target.address)
         } else {
-          route = try await devices.route(on: target.device)
+          route = try await devices.networkRoute(on: target.device, address: target.address)
         }
         if Task.isCancelled {
           await route.close()
@@ -186,7 +169,7 @@ import UniformTypeIdentifiers
       } catch {
         if !Task.isCancelled {
           issue =
-            if target.mode == .network && error as? HostFailure == .transport {
+            if error as? HostFailure == .transport {
               "Selected Mac address changed. Choose an available address and try again."
             } else {
               (error as? HostFailure)?.localizedDescription
@@ -214,51 +197,24 @@ import UniformTypeIdentifiers
     panel.allowedContentTypes = [apkType]
     panel.canChooseDirectories = false
     guard panel.runModal() == .OK, let apk = panel.url else { return }
-    guard selection.claimOperation(on: selected) else { return }
-    render()
-    Task {
-      var issue: String?
-      defer {
-        selection.finishOperation(issue: issue)
-        render()
-      }
-      do {
-        guard await idleForDeviceOperation(selected) else { throw HostFailure.invalidState }
-        try await devices.install(apk: apk, on: selected)
-      } catch {
-        issue =
-          (error as? HostFailure)?.localizedDescription
-          ?? "Install failed. Check USB authorization and try again."
-      }
-    }
+    Task { await install(apk: apk, on: selected) }
   }
-  private func cleanupReverse() {
-    guard selection.isEditable, let selected = selection.selectedDevice else { return }
-    let prompt = NSAlert()
-    prompt.messageText = "Remove Mirri USB reverse ports on the selected tablet?"
-    prompt.informativeText =
-      "Only tcp:5560 and tcp:5561 pointing to the same local ports will be removed. "
-      + "Do this only when Mirri is stopped and you have checked they are stale."
-    prompt.addButton(withTitle: "Remove these two ports")
-    prompt.addButton(withTitle: "Cancel")
-    guard prompt.runModal() == .alertFirstButtonReturn else { return }
-    guard selection.claimOperation(on: selected) else { return }
+  /// Returns the failure shown to the user, or nil on success.
+  @discardableResult private func install(apk: URL, on selected: ADBDevice) async -> String? {
+    guard selection.claimOperation(on: selected) else { return "Mirri is busy" }
     render()
-    Task {
-      var issue: String?
-      defer {
-        selection.finishOperation(issue: issue)
-        render()
-      }
-      do {
-        guard await idleForDeviceOperation(selected) else { throw HostFailure.invalidState }
-        try await devices.explicitReverseCleanup(on: selected)
-      } catch {
-        issue =
-          (error as? HostFailure)?.localizedDescription
-          ?? "Cleanup failed. Check the USB device and try again."
-      }
+    var issue: String?
+    do {
+      guard await idleForDeviceOperation(selected) else { throw HostFailure.invalidState }
+      try await devices.install(apk: apk, on: selected)
+    } catch {
+      issue =
+        (error as? HostFailure)?.localizedDescription
+        ?? "Install failed. Check USB authorization and try again."
     }
+    selection.finishOperation(issue: issue)
+    render()
+    return issue
   }
   @objc private func sleep() {
     sleepStop = Task { await stopSession() }
@@ -268,16 +224,179 @@ import UniformTypeIdentifiers
       await sleepStop?.value
       sleepStop = nil
       await stopSession()
-      autoAttemptedSerial = nil
       await refreshDevices()
     }
   }
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     poll?.cancel()
+    control?.stop()
     Task {
       await stopSession()
       NSApplication.shared.reply(toApplicationShouldTerminate: true)
     }
     return .terminateLater
+  }
+}
+
+// MARK: - `mirri` terminal command
+
+extension AppDelegate {
+  private func reply(_ fields: [String: Any]) -> Data {
+    (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]))
+      ?? Data(#"{"ok":false,"error":"encoding"}"#.utf8)
+  }
+  private func failure(_ message: String) -> Data { reply(["ok": false, "error": message]) }
+
+  /// Numeric and model facts only; the ADB serial never leaves the app.
+  private func status() -> [String: Any] {
+    let snapshot = selection.snapshot
+    let preferences = settings.preferences()
+    return [
+      "ok": true, "headline": selection.headline, "state": snapshot.state.rawValue,
+      "message": snapshot.message, "starting": selection.isStarting,
+      "busy": !selection.isEditable, "notice": selection.notice?.message ?? NSNull(),
+      "device": snapshot.device, "virtualMode": snapshot.virtualMode,
+      "clientMode": snapshot.clientMode, "video": snapshot.video, "metrics": snapshot.metrics,
+      "devices": selection.devices.map(\.model),
+      "selectedDevice": selection.selectedDevice.flatMap(selection.devices.firstIndex)
+        .map { $0 + 1 } ?? NSNull(),
+      "addresses": selection.addresses.map { ["interface": $0.interface, "address": $0.address] },
+      "selectedAddress": selection.selectedAddress?.address ?? NSNull(),
+      "logFolder": SessionLogger.logFolder.path,
+      "settings": [
+        "codec": preferences.codec.rawValue, "size": preferences.logicalSize.rawValue,
+        "zoom": preferences.zoom.rawValue, "pencil": preferences.auxiliaryAction.rawValue,
+        "avcBitrate": preferences.avcBitrate / 1_000_000,
+        "hevcBitrate": preferences.hevcBitrate / 1_000_000, "grace": preferences.graceSeconds,
+        "adaptiveBitrate": preferences.adaptiveBitrate,
+      ],
+    ]
+  }
+
+  private func chooseDevice(_ wanted: Any?) -> String? {
+    if let index = wanted as? Int {
+      guard selection.devices.indices.contains(index - 1) else { return "No tablet \(index)" }
+      selection.select(selection.devices[index - 1])
+    } else if let model = wanted as? String {
+      let matches = selection.devices.filter { $0.model == model }
+      guard matches.count == 1 else { return "Expected one tablet named \(model)" }
+      selection.select(matches[0])
+    } else if selection.selectedDevice == nil, selection.devices.count == 1 {
+      selection.select(selection.devices[0])
+    }
+    return selection.selectedDevice == nil
+      ? (selection.readinessHelp ?? "Choose a tablet with --device") : nil
+  }
+
+  private func chooseAddress(_ wanted: Any?) -> String? {
+    if let wanted = wanted as? String {
+      let matches = selection.addresses.filter { $0.interface == wanted || $0.address == wanted }
+      guard matches.count == 1 else { return "No single Mac address matches \(wanted)" }
+      selection.select(matches[0])
+    } else if selection.selectedAddress == nil, selection.addresses.count == 1 {
+      selection.select(selection.addresses[0])
+    }
+    return selection.selectedAddress == nil
+      ? (selection.readinessHelp ?? "Choose a Mac address with --address") : nil
+  }
+
+  private func applySettings(_ request: [String: Any]) -> String? {
+    if let value = request["codec"] as? String {
+      guard let codec = HostPreferences.Codec(rawValue: value) else { return "Unknown codec" }
+      settings.preferredCodec = codec
+    }
+    if let value = request["size"] as? String {
+      guard let size = HostPreferences.LogicalSize(rawValue: value) else { return "Unknown size" }
+      settings.logicalSize = size
+    }
+    if let value = request["zoom"] as? String {
+      guard let zoom = HostPreferences.Zoom(rawValue: value) else { return "Unknown zoom" }
+      settings.zoom = zoom
+    }
+    if let value = request["pencil"] as? String {
+      guard let action = HostPreferences.AuxiliaryAction(rawValue: value) else {
+        return "Unknown pencil action"
+      }
+      settings.auxiliaryAction = action
+    }
+    if let value = request["adaptiveBitrate"] {
+      guard let adaptive = value as? Bool else { return "adaptiveBitrate must be true or false" }
+      settings.adaptiveBitrate = adaptive
+    }
+    for (key, range) in [("avcBitrate", 20...80), ("hevcBitrate", 25...80), ("grace", 1...60)] {
+      guard let value = request[key] else { continue }
+      guard let number = value as? Int, range.contains(number) else {
+        return "\(key) must be \(range.lowerBound)...\(range.upperBound)"
+      }
+      switch key {
+      case "avcBitrate": settings.avcBitrate = UInt32(number) * 1_000_000
+      case "hevcBitrate": settings.hevcBitrate = UInt32(number) * 1_000_000
+      default: settings.grace = number
+      }
+    }
+    return nil
+  }
+
+  func control(_ data: Data) async -> Data {
+    guard let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let command = request["command"] as? String
+    else { return failure("Malformed request") }
+    switch command {
+    case "status":
+      return reply(status())
+    case "refresh":
+      await refreshDevices()
+      return reply(status())
+    case "show":
+      menu.showWhenReady()
+      return reply(status())
+    case "connect":
+      guard selection.isEditable else { return failure("Mirri is busy; disconnect first") }
+      await refreshDevices()
+      guard selection.isEditable else { return failure("Mirri is busy; disconnect first") }
+      if let problem = chooseDevice(request["device"]) ?? chooseAddress(request["address"]) {
+        render()
+        return failure(problem)
+      }
+      let media = request["media"] as? String ?? "rtc"
+      guard media == "tcp" || media == "rtc" else { return failure("Unknown media") }
+      connect(rtc: media == "rtc")
+      guard pendingStart != nil else {
+        return failure(selection.readinessHelp ?? "Cannot connect")
+      }
+      return reply(status())
+    case "disconnect":
+      Task { await self.stopSession() }
+      return reply(status())
+    case "reconnect":
+      guard selection.canRetry else { return failure("Not connected") }
+      reconnect()
+      return reply(status())
+    case "set":
+      guard selection.isEditable else { return failure("Settings apply to the next connection") }
+      if let problem = applySettings(request) { return failure(problem) }
+      render()
+      return reply(status())
+    case "install":
+      guard let path = request["apk"] as? String, path.hasSuffix(".apk"),
+        FileManager.default.fileExists(atPath: path)
+      else { return failure("APK not found") }
+      guard selection.isEditable else { return failure("Mirri is busy; disconnect first") }
+      await refreshDevices()
+      if let problem = chooseDevice(request["device"]) { return failure(problem) }
+      guard let selected = selection.selectedDevice else { return failure("No tablet") }
+      if let issue = await install(apk: URL(fileURLWithPath: path), on: selected) {
+        return failure(issue)
+      }
+      return reply(status())
+    case "quit":
+      // Not from a main-queue job: the terminate-later run loop could not then
+      // drain the main queue to run the session stop it waits for.
+      NSApplication.shared.perform(
+        #selector(NSApplication.terminate(_:)), with: nil, afterDelay: 0)
+      return reply(["ok": true])
+    default:
+      return failure("Unknown command")
+    }
   }
 }

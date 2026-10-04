@@ -22,8 +22,10 @@ import androidx.lifecycle.repeatOnLifecycle
 import dev.mirri.client.input.TouchInterpreter
 import dev.mirri.client.session.ClientLaunchBoundary
 import dev.mirri.client.session.ClientSessionState
+import dev.mirri.client.session.NetworkMedia
 import dev.mirri.client.session.SessionController
 import kotlinx.coroutines.launch
+import org.webrtc.SurfaceViewRenderer
 
 /** Immersive, landscape-only SurfaceView; no codec or socket work runs on the UI thread. */
 class MainActivity : ComponentActivity() {
@@ -31,6 +33,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var input: TouchInterpreter
     private lateinit var status: TextView
 
+    @Suppress("CyclomaticComplexMethod")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -58,6 +61,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         input = TouchInterpreter(controller::onInput)
+        val launch = ClientLaunchBoundary.decode(intent)
         val surface =
             object : SurfaceView(this) {
                 private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
@@ -120,13 +124,79 @@ class MainActivity : ComponentActivity() {
                     },
                 )
             }
+        val mediaSurface: SurfaceView =
+            if (launch?.media == NetworkMedia.RTC) {
+                object : SurfaceViewRenderer(this) {
+                    var touchClick = false
+                    var downX = 0f
+                    var downY = 0f
+                    var tap = false
+
+                    override fun onTouchEvent(event: MotionEvent): Boolean {
+                        when (event.actionMasked) {
+                            MotionEvent.ACTION_DOWN -> {
+                                tap = true
+                                downX = event.x
+                                downY = event.y
+                            }
+                            MotionEvent.ACTION_MOVE ->
+                                if (event.pointerCount != 1 ||
+                                    kotlin.math.hypot(event.x - downX, event.y - downY) > ViewConfiguration.get(context).scaledTouchSlop
+                                ) {
+                                    tap = false
+                                }
+                            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> tap = false
+                        }
+                        val handled = input.onMotion(event, width, height)
+                        if (event.actionMasked == MotionEvent.ACTION_UP && tap) {
+                            tap = false
+                            touchClick = true
+                            try {
+                                performClick()
+                            } finally {
+                                touchClick = false
+                            }
+                        }
+                        return handled
+                    }
+
+                    override fun performClick(): Boolean {
+                        super.performClick()
+                        if (!touchClick) input.accessibilityClick()
+                        return true
+                    }
+                }.also { renderer ->
+                    controller.setRtcRenderer(renderer)
+                    renderer.isClickable = true
+                    renderer.holder.addCallback(
+                        object : SurfaceHolder.Callback {
+                            override fun surfaceCreated(holder: SurfaceHolder) = Unit
+
+                            override fun surfaceChanged(
+                                holder: SurfaceHolder,
+                                format: Int,
+                                width: Int,
+                                height: Int,
+                            ) {
+                                controller.onSurfaceAvailable(holder.surface, width, height)
+                            }
+
+                            override fun surfaceDestroyed(holder: SurfaceHolder) {
+                                input.reset()
+                                controller.onSurfaceDestroyed()
+                            }
+                        },
+                    )
+                }
+            } else {
+                surface
+            }
         val view =
             FrameLayout(this).apply {
-                addView(surface, FrameLayout.LayoutParams(-1, -1))
+                addView(mediaSurface, FrameLayout.LayoutParams(-1, -1))
                 addView(status, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START))
             }
         setContentView(view)
-        val launch = ClientLaunchBoundary.decode(intent)
         if (launch == null) {
             Log.w("MirriLifecycle", "launch rejected (invalid extras)")
             status.setText(R.string.launch_from_host)

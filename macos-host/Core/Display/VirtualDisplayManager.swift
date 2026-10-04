@@ -22,12 +22,16 @@ public enum DisplayReadback {
       self.refreshHz = refreshHz
     }
   }
+  /// Twice the 60 fps stream. When an app's frame misses a refresh the desktop
+  /// shows it one 8.3 ms refresh later; at 60 Hz that refresh repeated the old
+  /// frame (33 ms) and the next one swallowed an update.
+  public static let refreshHz = 120.0
   public static func matchesMode(
     _ mode: Mode, requested: HostPreferences.LogicalSize
   ) -> Bool {
     mode.logical == CGSize(width: requested.width, height: requested.height)
       && mode.pixels == CGSize(width: 2456, height: 1600)
-      && abs(mode.refreshHz - 60) < 0.01
+      && abs(mode.refreshHz - refreshHz) < 0.01
   }
   /// Fail closed if macOS publishes another logical mode, pixel backing or refresh.
   public static func matches(
@@ -150,7 +154,8 @@ struct DisplayGeometry {
     do {
       try owned.create(
         withSerial: serial, logicalWidth: UInt32(logicalSize.width),
-        logicalHeight: UInt32(logicalSize.height), hiDPI: logicalSize.hiDPI)
+        logicalHeight: UInt32(logicalSize.height), hiDPI: logicalSize.hiDPI,
+        refreshRate: DisplayReadback.refreshHz)
     } catch {
       let failure = error as NSError
       logger.display(
@@ -176,7 +181,7 @@ struct DisplayGeometry {
       }
       logger.display(
         "verification timed out requested \(logicalSize.width)x\(logicalSize.height) "
-          + "backing 2456x1600@60 observed \(Self.readback(owned.displayID)) "
+          + "backing 2456x1600@\(Int(DisplayReadback.refreshHz)) observed \(Self.readback(owned.displayID)) "
           + "available \(Self.availableModes(owned.displayID))")
       throw HostFailure.exactDisplay
     } catch {

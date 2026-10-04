@@ -9,7 +9,8 @@ public enum VideoCodec: UInt64, Sendable {
   var mediaType: CMVideoCodecType { self == .avc ? kCMVideoCodecType_H264 : kCMVideoCodecType_HEVC }
   var profile: String {
     self == .avc
-      ? kVTProfileLevel_H264_High_5_1 as String : kVTProfileLevel_HEVC_Main_AutoLevel as String
+      ? kVTProfileLevel_H264_High_AutoLevel as String
+      : kVTProfileLevel_HEVC_Main_AutoLevel as String
   }
   var sets: Int { self == .avc ? 2 : 3 }
 }
@@ -124,9 +125,15 @@ public final class VideoEncoder: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     guard session == nil else { throw HostFailure.invalidState }
-    let options =
-      [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String: true]
-      as CFDictionary
+    var specification = [
+      kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String: true
+    ]
+    if codec == .avc {
+      // RealTime alone still spends ~40 ms in VT on the owned-motion workload.
+      // This mode disables lookahead and requires High AutoLevel / infinite GOP.
+      specification[kVTVideoEncoderSpecification_EnableLowLatencyRateControl as String] = true
+    }
+    let options = specification as CFDictionary
     var result: VTCompressionSession?
     let status = VTCompressionSessionCreate(
       allocator: kCFAllocatorDefault, width: 2456, height: 1600,
@@ -148,7 +155,11 @@ public final class VideoEncoder: @unchecked Sendable {
         created, kVTCompressionPropertyKey_YCbCrMatrix,
         kCVImageBufferYCbCrMatrix_ITU_R_709_2)
       try Self.set(created, kVTCompressionPropertyKey_AverageBitRate, bitrate as CFNumber)
-      try Self.set(created, kVTCompressionPropertyKey_MaxKeyFrameInterval, 60 as CFNumber)
+      // AVC low-latency mode emits an initial IDR, then P frames. Decoder
+      // resynchronization starts a new codec generation with a new initial IDR.
+      if codec == .hevc {
+        try Self.set(created, kVTCompressionPropertyKey_MaxKeyFrameInterval, 60 as CFNumber)
+      }
       try Self.set(created, kVTCompressionPropertyKey_ExpectedFrameRate, 60 as CFNumber)
       guard VTCompressionSessionPrepareToEncodeFrames(created) == noErr else {
         throw HostFailure.hardwareCodec

@@ -7,6 +7,7 @@ class WireOrder(
     private val epoch: ULong,
     private val sessionId: ByteArray? = null,
     previousGeneration: UInt = 0u,
+    private val rtc: Boolean = false,
 ) {
     enum class Peer { HOST, CLIENT }
 
@@ -46,6 +47,16 @@ class WireOrder(
     private var nextFrame = 0uL
     private var needsIdr = false
 
+    /** Old authenticated RTC epochs count toward framing but cannot reach this attempt. */
+    fun discardStaleRtc(message: WireMessage): Boolean {
+        if (!rtc || message.type !in 23..31) return false
+        val seen = (message.fields[1] as? Value.Number)?.value ?: throw WireException("invalid RTC epoch")
+        if (seen >= epoch) return false
+        if (message.sequence != nextSequence || nextSequence == ULong.MAX_VALUE) throw WireException("invalid RTC sequence")
+        nextSequence++
+        return true
+    }
+
     /** Only call for an ignorable future-minor type validated by WireFramer. */
     fun skipUnknown(sequence: ULong) {
         if (nextSequence == 0uL || sequence != nextSequence || nextSequence == ULong.MAX_VALUE) {
@@ -69,7 +80,7 @@ class WireOrder(
         val permitted = permitted(type)
         val first = firstType()
         val initialError = channel == Channel.CONTROL && peer == Peer.HOST && type == MessageType.ERROR
-        val wrongFirst = nextSequence == 0uL && type != first && !initialError
+        val wrongFirst = nextSequence == 0uL && type != (if (rtc && peer == Peer.HOST) MessageType.RTC_PREPARE else first) && !initialError
         val wrongSequence = sequence != nextSequence || nextSequence == ULong.MAX_VALUE
         if (!permitted || wrongSequence || wrongFirst) {
             throw WireException("invalid wire order")
@@ -89,7 +100,49 @@ class WireOrder(
                 } else {
                     type == MessageType.VIDEO_HELLO
                 }
-            Channel.CONTROL -> type in if (peer == Peer.HOST) hostControl else clientControl
+            Channel.CONTROL ->
+                type in (
+                    if (rtc) {
+                        if (peer ==
+                            Peer.HOST
+                        ) {
+                            setOf(
+                                MessageType.RTC_PREPARE,
+                                MessageType.RTC_OFFER,
+                                MessageType.RTC_ICE_CANDIDATE,
+                                MessageType.RTC_ICE_END,
+                                MessageType.RTC_START,
+                                MessageType.STOP_SESSION,
+                                MessageType.PING,
+                                MessageType.ERROR,
+                            )
+                        } else {
+                            setOf(
+                                MessageType.CLIENT_HELLO,
+                                MessageType.RTC_CAPABILITIES,
+                                MessageType.RTC_PREPARED,
+                                MessageType.RTC_ANSWER,
+                                MessageType.RTC_ICE_CANDIDATE,
+                                MessageType.RTC_ICE_END,
+                                MessageType.RTC_MEDIA_READY,
+                                MessageType.STOP_ACK,
+                                MessageType.REJECTED,
+                                MessageType.ERROR,
+                                MessageType.PONG,
+                                MessageType.INPUT_BATCH,
+                                MessageType.SCROLL,
+                                MessageType.ZOOM,
+                                MessageType.CONTEXT,
+                                MessageType.SHORTCUT,
+                                MessageType.AUXILIARY,
+                            )
+                        }
+                    } else if (peer == Peer.HOST) {
+                        hostControl
+                    } else {
+                        clientControl
+                    }
+                )
         }
 
     private fun firstType(): MessageType =

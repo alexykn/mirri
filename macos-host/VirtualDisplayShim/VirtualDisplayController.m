@@ -29,6 +29,7 @@
            logicalWidth:(uint32_t)width
           logicalHeight:(uint32_t)height
                   hiDPI:(BOOL)hiDPI
+            refreshRate:(double)refreshRate
                   error:(NSError **)error {
   if (_display) { return NO; }
   if (!((width == 2456 && height == 1600 && !hiDPI) ||
@@ -47,7 +48,7 @@
   } else {
     @try {
     CGVirtualDisplayDescriptor *descriptor = [descriptorClass new];
-    descriptor.name = @"Mirri USB Display";
+    descriptor.name = @"Mirri Display";
     descriptor.vendorID = 0x4D525249;
     descriptor.productID = 0x2456;
     descriptor.serialNum = serial;
@@ -61,10 +62,10 @@
     } else {
       CGVirtualDisplaySettings *settings = [settingsClass new];
       settings.hiDPI = hiDPI ? 1 : 0;
-      CGVirtualDisplayMode *mode = [[modeClass alloc] initWithWidth:width height:height refreshRate:60.0];
+      CGVirtualDisplayMode *mode = [[modeClass alloc] initWithWidth:width height:height refreshRate:refreshRate];
       settings.modes = @[mode];
       if (![display applySettings:settings]) {
-        failure = @"Virtual display refused requested logical mode with exact 2456x1600 backing at 60 Hz";
+        failure = @"Virtual display refused requested logical mode with exact 2456x1600 backing";
       } else {
         _display = display;
         return YES;

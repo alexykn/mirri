@@ -137,3 +137,57 @@ framework-input-index **available→acquired idle time**, not packet-to-decoder
 queue wait or starvation. Prior no-delay / GOP120 explorations are already
 rejected as new ideas here; do not repeat them or attribute this decoder
 priority test to them.
+
+## Follow-up: Wi-Fi policy and Surface presentation (2026-09-27)
+
+With the AVC low-latency host retained, the largest sampled Wi-Fi stall spent
+16.72 ms from capture callback to host write completion, then a causally bounded
+470.72–482.88 ms before the tablet completed that frame's packet. Following
+frames had decreasing post-write delays. This locates a backlog after local
+write completion; it does **not** distinguish radio power saving, AP/kernel
+queues, TCP loss/retransmission, or a stalled receiver. Local write completion
+does not mean remote delivery.
+
+[Moonlight's pinned `Game.java`](https://github.com/moonlight-stream/moonlight-android/blob/b48494cb96bff23d8886c4775cc4f39a1075495d/app/src/main/java/com/limelight/Game.java)
+acquires both a high-performance Wi-Fi lock and, on API 29+, a low-latency lock.
+It catches vendor `SecurityException` even with `WAKE_LOCK` declared.
+[Android's low-latency Wi-Fi mode](https://developer.android.com/reference/android/net/wifi/WifiManager#WIFI_MODE_FULL_LOW_LATENCY)
+is a foreground, screen-on policy with power/throughput/roaming tradeoffs, not
+a guarantee against network stalls.
+
+**Tested and rejected on this tablet:** one attempt-scoped
+`WIFI_MODE_FULL_LOW_LATENCY` lock, with release in `finally`, no USB lock and
+no other media changes. Android API 31 reported the lock held, released, and
+96,075 ms of low-latency active time after the first candidate run. Four
+90-second runs were ordered baseline → candidate → candidate → baseline:
+
+| Run | Sampled callback→packet p95 bounds, ms | Sampled callback→render p95 bounds, ms |
+| --- | ---: | ---: |
+| Baseline 1 | 37.3–50.0 | 92.5–104.3 |
+| Candidate 1 | 51.5–64.0 | 105.1–117.8 |
+| Candidate 2 | 80.2–94.6 | 133.8–150.3 |
+| Baseline 2 | 65.4–81.6 | 125.1–141.9 |
+
+All collection windows completed; render evidence remained incomplete.
+Background load and network conditions were uncontrolled, so these results
+do not prove the hint causes regressions. They show no benefit sufficient to
+retain its power-policy change. The source was removed and the original APK
+restored before the presentation experiment. Numeric evidence, both APKs and
+the candidate source are in ignored `artifacts/wifi-latency-lock-2026-09-27/`.
+
+For presentation, [Moonlight's pinned decoder renderer](https://github.com/moonlight-stream/moonlight-android/blob/b48494cb96bff23d8886c4775cc4f39a1075495d/app/src/main/java/com/limelight/binding/video/MediaCodecDecoderRenderer.java)
+distinguishes immediate low-latency release with `System.nanoTime()` from
+timestamp-zero no-drop behavior and a separately bounded Choreographer pacing
+mode. Mirri's boolean `releaseOutputBuffer(index, true)` instead inherits
+session-relative media PTS, which is not an Android clock. The
+[MediaCodec API](https://developer.android.com/reference/android/media/MediaCodec#releaseOutputBuffer(int,long))
+documents different SurfaceView scheduling/drop behavior for near-current and
+far-away timestamps. An explicit local timestamp is therefore a distinct,
+testable presentation change—not another decoder-priority hint or an excuse
+to add an unbounded output queue.
+
+Scrcpy's separate sockets and default immediate display are useful architectural
+comparisons, but its desktop decoder is not Android Surface evidence. Sunshine
+uses UDP video, so its advice about burst traffic and network jitter is not a
+drop-in recipe for Mirri's reliable ordered TCP stream. Arbitrarily dropping
+encoded P frames would violate reference dependencies.

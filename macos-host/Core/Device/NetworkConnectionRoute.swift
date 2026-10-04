@@ -8,6 +8,7 @@ public actor NetworkConnectionRoute: HostConnectionRoute {
   public nonisolated let waitingDescription =
     "Waiting for pinned TLS control (USB setup on first launch)"
   public nonisolated let requiresEpochBootstrap = true
+  public nonisolated let rtcSelected: Bool
   private let device: ADBDevice
   private let address: LocalIPv4Address
   private let adb: ADBClient
@@ -20,11 +21,13 @@ public actor NetworkConnectionRoute: HostConnectionRoute {
   private var inFlight: Task<Void, Never>?
   private var closing: Task<Void, Never>?
 
-  init(device: ADBDevice, address: LocalIPv4Address, adb: ADBClient, service: USBDeviceService) {
+  init(device: ADBDevice, address: LocalIPv4Address, adb: ADBClient, service: USBDeviceService,
+    rtcSelected: Bool = false) {
     self.device = device
     self.address = address
     self.adb = adb
     self.service = service
+    self.rtcSelected = rtcSelected
     displayLabel = "\(device.model) · Network \(address.address) (USB setup)"
     transportDescription = "Binding selected \(address.interface) · \(address.address) with TLS"
     streamingDescription = "Streaming over Network (USB setup)"
@@ -51,16 +54,35 @@ public actor NetworkConnectionRoute: HostConnectionRoute {
     let control = try BoundedByteListener(
       port: 5561, noDelay: true, address: address.address, identity: identity.identity)
     self.control = control
-    video = try BoundedByteListener(
-      port: 5560, address: address.address, identity: identity.identity)
+    if !rtcSelected {
+      // One write per access unit: Nagle would hold each frame's final partial
+      // segment until the tablet ACKs the rest.
+      video = try BoundedByteListener(
+        port: 5560, noDelay: true, address: address.address, identity: identity.identity)
+    }
   }
   private func awaitBoundPorts() async throws {
-    guard let control, let video else { throw HostFailure.transport }
+    guard let control else { throw HostFailure.transport }
     _ = try await control.boundPort()
     try checkOpen()
-    _ = try await video.boundPort()
+    if let video { _ = try await video.boundPort() }
     try checkOpen()
     try address.validateCurrent()
+  }
+  /// A just-cancelled listener can still hold its port for a moment; rebinding
+  /// at once then fails and would turn a reconnect into a transport error.
+  private func bindListeners() async throws {
+    for attempt in 0..<10 {
+      do {
+        try bind()
+        try await awaitBoundPorts()
+        return
+      } catch HostFailure.transport where attempt < 9 {
+        interrupt()
+        try await Task.sleep(for: .milliseconds(100))
+        try checkOpen()
+      }
+    }
   }
   public func prepare() async throws -> String {
     try checkOpen()
@@ -74,15 +96,13 @@ public actor NetworkConnectionRoute: HostConnectionRoute {
     else { throw HostFailure.incompatible }
     try checkOpen()
     identity = try NetworkIdentity.create(for: address)
-    try bind()
-    try await awaitBoundPorts()
+    try await bindListeners()
     return "\(displayLabel) · client \(installed.versionName) (v\(installed.versionCode))"
   }
   public func retry() async throws {
     try checkOpen()
     interrupt()
-    try bind()
-    try await awaitBoundPorts()
+    try await bindListeners()
   }
   public func bootstrap(_ credentials: AttemptCredentials) async throws {
     try checkOpen()
@@ -92,7 +112,9 @@ public actor NetworkConnectionRoute: HostConnectionRoute {
     guard !launched else { return }  // All later epochs are learned over authenticated TLS.
     let adb = self.adb
     let device = self.device
-    let launch = NetworkLaunch(address: address.address, pin: identity.pin)
+    let launch = NetworkLaunch(address: address.address, pin: identity.pin,
+      media: rtcSelected ? .rtc : .comparison,
+      sessionId: rtcSelected ? credentials.sessionId : nil)
     try await tracked {
       try await adb.launchClient(
         device: device, token: credentials.token,

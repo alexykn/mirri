@@ -34,6 +34,7 @@ public actor SessionCoordinator {
   private var display: VirtualDisplayManager?
   private var metrics = MetricsCollector()
   private var videoTiming: HostVideoTiming?
+  private var latencyTrace: HostLatencyTrace?
   private var timingReportSamples = 0
   private var timingReportLockMaxNs: UInt64 = 0
   private var timingReportFormatMaxNs: UInt64 = 0
@@ -46,6 +47,19 @@ public actor SessionCoordinator {
   private var control: WireConnection?
   private var video: WireConnection?
   private var capture: CapturePipeline?
+  private var rtcPeer: RtcPeer?
+  private var rtcWriter: RtcSignalWriter?
+  private var rtcEvents: Task<Void, Never>?
+  private var rtcTimer: Task<Void, Never>?
+  private var rtcAttempt = Data()
+  private var rtcOfferWritten = false
+  private var rtcRemote = RtcIceLedger()
+  private var rtcCandidates: [(String, UInt16, String)] = []
+  private var rtcLocalCandidateCount = 0
+  private var rtcMid = ""
+  private var rtcFailure = false
+  private var rtcTimedOut = false
+  private var rtcRttMs: Double?
   private var input: InputController?
   private var token = Data()
   private var sessionId = Data()
@@ -138,7 +152,12 @@ public actor SessionCoordinator {
       try await handshake(id: id)
     } catch {
       if incarnation == id && snapshot.state != .stopping {
-        await terminal(error as? HostFailure ?? (error is WireFailure ? .malformed : .transport))
+        let failure: HostFailure = if let error = error as? HostFailure { error }
+          else if let wire = error as? WireFailure {
+            wire == .unsupported && (newRoute as? NetworkConnectionRoute)?.rtcSelected == true
+              ? .version : .malformed
+          } else { .transport }
+        await terminal(failure)
       }
     }
   }
@@ -149,7 +168,8 @@ public actor SessionCoordinator {
     let budget =
       reconnectUntil.map {
         max(Duration.zero, min(.seconds(10), ContinuousClock.now.duration(to: $0)))
-      } ?? .seconds(10)
+      } ?? (route is NetworkConnectionRoute && (route as? NetworkConnectionRoute)?.rtcSelected == true
+        ? .seconds(36) : .seconds(10))
     let timeout = Task { [weak self] in
       try? await Task.sleep(for: budget)
       if !Task.isCancelled {
@@ -158,6 +178,19 @@ public actor SessionCoordinator {
     }
     defer { timeout.cancel() }
     let authenticated = try await acceptAuthenticatedControl(route, attempt: attempt)
+    if let network = route as? NetworkConnectionRoute, network.rtcSelected {
+      do {
+        try await rtcHandshake(authenticated, attempt: attempt)
+      } catch {
+        logger.diagnostic("rtc-handshake-exception-\(String(describing: type(of: error)))")
+        if let failure = error as? HostFailure {
+          logger.diagnostic("rtc-handshake-failure-\(String(describing: failure))")
+        }
+        if rtcTimedOut { throw HostFailure.timeout }
+        throw error
+      }
+      return
+    }
     let (config, active) = try await prepareExactDisplay(authenticated.greeting, attempt: attempt)
     let barrier = try await awaitClientBarrier(
       channel: authenticated.channel, route: route, order: authenticated.order,
@@ -227,6 +260,288 @@ public actor SessionCoordinator {
     return AuthenticatedControl(channel: channel, order: order, greeting: greeting)
   }
 
+  /// RTC deliberately bypasses legacy SessionConfig/video socket/VideoEncoder.
+  private func rtcHandshake(_ auth: AuthenticatedControl, attempt: AttemptIdentity) async throws {
+    guard auth.greeting.nativeSize == (1600, 2456), auth.greeting.active.isExact,
+      auth.greeting.modes.contains(where: \.isExact) else { throw HostFailure.incompatible }
+    var order = auth.order
+    let channel = auth.channel
+    rtcTimedOut = false
+    rtcArmDeadline(.seconds(5), attempt: attempt)
+    let writer = RtcSignalWriter(channel: channel)
+    rtcWriter = writer
+    let caps = try await rtcRead(channel, order: &order, attempt: attempt)
+    guard caps.type == MessageKind.rtcCapabilities.rawValue,
+      (try RtcSignal.number(caps.fields[2])) == 1,
+      (try RtcSignal.number(caps.fields[4])) == 1,
+      (try RtcSignal.number(caps.fields[5])) == 2,
+      (try RtcSignal.number(caps.fields[6])) >= 52,
+      (try RtcSignal.number(caps.fields[7])) == 1,
+      (try RtcSignal.number(caps.fields[8])) == 1 else { throw HostFailure.hardwareCodec }
+    let nonce = try RtcSignal.bytes(caps.fields[3])
+    rtcAttempt = try Self.random(16)
+    let attemptID = rtcAttempt
+    await state(.negotiating, "RTC hardware High 5.2 and exact mode")
+    // Probe prior to prepare; the actual RTC encoder independently requires
+    // and checks hardware on its own VT session at startEncode.
+    guard VideoEncoder.probe(.avc) else { throw HostFailure.hardwareCodec }
+    try valid(attempt)
+    await state(.creatingDisplay, "Publishing exact virtual display for RTC")
+    if display == nil { display = await MainActor.run { VirtualDisplayManager() } }
+    guard let display else { throw HostFailure.exactDisplay }
+    let active = try await display.create(logicalSize: preferences.logicalSize)
+    try valid(attempt)
+    snapshot.virtualMode = "\(active.logicalSize.width)x\(active.logicalSize.height) logical, 2456x1600 @ \(Int(active.refreshHz)) Hz"
+    try await writer.send(RtcSignal.message(.rtcPrepare, session: sessionId, epoch: epoch,
+      attempt: attemptID, fields: [.bytes(nonce), .integer(1), .integer(2), .integer(52),
+        .object([.integer(2456), .integer(1600)]), .integer(60000), .integer(1)]))
+    rtcArmDeadline(.seconds(10), attempt: attempt)
+    await state(.preparingClient, "Awaiting RTC hardware decoder and surface readback")
+    let prepared = try await rtcRead(channel, order: &order, attempt: attempt)
+    guard prepared.type == MessageKind.rtcPrepared.rawValue else { throw HostFailure.malformed }
+    try RtcSignal.match(prepared, attempt: attemptID)
+    logger.diagnostic("rtc-prepared-received")
+    snapshot.clientMode = "1600x2456 (RTC hardware readback)"
+    let decoder = try RtcSignal.text(prepared.fields[6])
+    guard !decoder.isEmpty else { throw HostFailure.hardwareCodec }
+    // No encoder/capture is started until the authenticated RTC start barrier.
+    let peer = RtcPeer()
+    rtcPeer = peer // Join ownership before its first asynchronous operation.
+    try peer.prepare(ceiling: preferences.avcBitrate, adaptive: preferences.adaptiveBitrate)
+    logger.diagnostic("rtc-peer-prepared")
+    rtcOfferWritten = false
+    rtcRemote = RtcIceLedger()
+    rtcCandidates = []
+    rtcLocalCandidateCount = 0
+    rtcFailure = false
+    rtcRttMs = nil
+    rtcEvents = Task { [weak self] in
+      for await event in peer.events {
+        await self?.rtcPeerEvent(event, attempt: attempt)
+      }
+    }
+    let offer: String
+    do { offer = try await peer.offer() }
+    catch { throw error as? HostFailure ?? .hardwareCodec }
+    try valid(attempt)
+    guard let mid = peer.videoMid, !mid.isEmpty, mid.utf8.count <= 32 else {
+      throw HostFailure.incompatible
+    }
+    logger.diagnostic("rtc-local-offer-created")
+    rtcMid = mid
+    guard RtcSDPProof.videoOnlyHigh(sdp: offer, direction: "sendonly", mid: mid) else {
+      throw HostFailure.incompatible
+    }
+    try await writer.send(RtcSignal.message(.rtcOffer, session: sessionId, epoch: epoch,
+      attempt: attemptID, fields: [.text(offer)]))
+    logger.diagnostic("rtc-offer-written")
+    try valid(attempt)
+    rtcOfferWritten = true
+    try await rtcFlushCandidates(attempt: attempt)
+    let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+    rtcArmDeadline(.seconds(10), attempt: attempt)
+    var answer: WireMessage?
+    while answer == nil {
+      let message = try await rtcRead(channel, order: &order, attempt: attempt)
+      if message.type == MessageKind.rtcAnswer.rawValue { answer = message }
+      else if message.type == MessageKind.rtcIceCandidate.rawValue ||
+        message.type == MessageKind.rtcIceEnd.rawValue {
+        try await rtcRemoteIce(message, attempt: attempt)
+      } else { throw HostFailure.malformed }
+    }
+    guard let answer else { throw HostFailure.malformed }
+    guard answer.type == MessageKind.rtcAnswer.rawValue else { throw HostFailure.malformed }
+    try RtcSignal.match(answer, attempt: attemptID)
+    logger.diagnostic("rtc-answer-received")
+    let sdp = try RtcSignal.text(answer.fields[4])
+    guard ContinuousClock.now < deadline else { throw HostFailure.timeout }
+    rtcArmDeadline(ContinuousClock.now.duration(to: deadline), attempt: attempt)
+    guard RtcSDPProof.videoOnlyHigh(sdp: sdp, direction: "recvonly", mid: mid) else {
+      throw HostFailure.incompatible
+    }
+    logger.diagnostic("rtc-answer-profile-accepted")
+    do { try await peer.answer(sdp) }
+    catch { throw error as? HostFailure ?? .incompatible }
+    logger.diagnostic("rtc-remote-answer-applied")
+    try valid(attempt)
+    let pendingIce = rtcRemote.applyRemoteDescription()
+    logger.diagnostic("rtc-remote-ice-pending-\(pendingIce.count)")
+    for text in pendingIce {
+      do { try await peer.addCandidate(mid: rtcMid, index: 0, text: text) }
+      catch { throw error as? HostFailure ?? .incompatible }
+      try valid(attempt)
+    }
+    var ready = false
+    logger.diagnostic("rtc-await-media-ready")
+    while !ready {
+      let message = try await rtcRead(channel, order: &order, attempt: attempt)
+      if message.type == MessageKind.rtcMediaReady.rawValue {
+        try RtcSignal.match(message, attempt: attemptID)
+        ready = true
+      } else if message.type == MessageKind.rtcIceCandidate.rawValue ||
+        message.type == MessageKind.rtcIceEnd.rawValue {
+        try await rtcRemoteIce(message, attempt: attempt)
+      } else { throw HostFailure.malformed }
+      if rtcFailure || ContinuousClock.now >= deadline { throw HostFailure.timeout }
+    }
+    // Keep draining authenticated ICE while waiting for the selected pair;
+    // otherwise candidates sent after MediaReady could never establish UDP.
+    controlReader = Task { [weak self] in
+      await self?.readRtcControl(channel, order: order, attempt: attempt)
+    }
+    while true {
+      try valid(attempt)
+      let status = await peer.mediaStatus()
+      if status == .ready { break }
+      if status == .nonUDP { logger.diagnostic("rtc-selected-non-udp"); throw HostFailure.transport }
+      if status == .codecOrGeometry { throw HostFailure.hardwareCodec }
+      guard !rtcFailure, ContinuousClock.now < deadline else { throw HostFailure.timeout }
+      try await Task.sleep(for: .milliseconds(100))
+    }
+    guard !rtcFailure, ContinuousClock.now < deadline else { throw HostFailure.timeout }
+    // An SDK gathering-complete callback cannot prove that all candidate
+    // callbacks were delivered. Connection/ready deadline is the ICE barrier.
+    try await writer.send(RtcSignal.message(.rtcStart, session: sessionId, epoch: epoch,
+      attempt: attemptID))
+    try valid(attempt)
+    guard !rtcFailure, !rtcTimedOut else { throw HostFailure.transport }
+    try await peer.start(display: active)
+    try valid(attempt)
+    guard !rtcFailure, !rtcTimedOut else { throw HostFailure.transport }
+    rtcTimer?.cancel(); rtcTimer = nil
+    input = InputController(display: active, zoom: preferences.zoom,
+      auxiliaryAction: preferences.auxiliaryAction)
+    reconnectUntil = nil
+    snapshot.video = "RTC H.264 High 5.2 hardware-required, selected UDP (capture started)"
+    await state(.streaming, "RTC video over UDP (USB credential, pinned TLS control)")
+    tick?.cancel()
+    tick = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(1))
+        await self?.updateMetrics(id: attempt.incarnation, channelEpoch: attempt.epoch)
+      }
+    }
+  }
+  private func rtcRead(_ channel: WireConnection, order: inout WireOrder,
+    attempt: AttemptIdentity) async throws -> WireMessage {
+    while true {
+      let record = try await channel.read()
+      try valid(attempt)
+      guard case .message(let message) = record else {
+        if case .skipped(let sequence) = record {
+          try order.skipUnknown(sequence: sequence)
+          continue
+        }
+        throw HostFailure.malformed
+      }
+      if (23...31).contains(message.type), message.fields.count >= 2,
+        (try RtcSignal.number(message.fields[1])) < UInt64(epoch) {
+        try order.skipStaleRtc(message)
+        continue
+      }
+      try order.accept(message)
+      guard message.fields.count >= 2,
+        (try RtcSignal.bytes(message.fields[0])) == sessionId,
+        (try RtcSignal.number(message.fields[1])) == UInt64(epoch) else {
+        throw HostFailure.malformed
+      }
+      return message
+    }
+  }
+  private func rtcRemoteIce(_ message: WireMessage, attempt: AttemptIdentity) async throws {
+    try valid(attempt)
+    try RtcSignal.match(message, attempt: rtcAttempt)
+    let mid = try RtcSignal.text(message.fields[4])
+    let index = UInt16(try RtcSignal.number(message.fields[5]))
+    if message.type == MessageKind.rtcIceEnd.rawValue {
+      try rtcRemote.end(mid: mid, expectedMid: rtcMid, index: index)
+      return
+    }
+    guard message.type == MessageKind.rtcIceCandidate.rawValue,
+      let peer = rtcPeer else { throw HostFailure.malformed }
+    guard let text = try rtcRemote.candidate(mid: mid, expectedMid: rtcMid,
+      index: index, text: RtcSignal.text(message.fields[6])) else { return }
+    if rtcRemote.count == 1 || rtcRemote.count.isMultiple(of: 16) {
+      logger.diagnostic("rtc-remote-candidates-\(rtcRemote.count)")
+    }
+    do { try await peer.addCandidate(mid: rtcMid, index: 0, text: text) }
+    catch { throw error as? HostFailure ?? .incompatible }
+    try valid(attempt)
+  }
+  private func rtcPeerEvent(_ event: RtcPeerEvent, attempt: AttemptIdentity) async {
+    guard incarnation == attempt.incarnation, epoch == attempt.epoch,
+      snapshot.state != .stopping else { return }
+    switch event {
+    case .state(let value): logger.diagnostic("rtc-peer-state-\(value)")
+    case .iceState(let value): logger.diagnostic("rtc-ice-state-\(value)")
+    case .encoderFailure(let stage):
+      logger.diagnostic("rtc-encoder-failed-\(stage)")
+      rtcFailure = true
+      if snapshot.state == .streaming { await terminal(.hardwareCodec) }
+      else { await control?.close() }
+    case .mediaProof(let description): logger.diagnostic("rtc-media-proof-\(description)")
+    case .outboundFrames(let description): logger.diagnostic("rtc-outbound-\(description)")
+    case .failed:
+      logger.diagnostic("rtc-peer-failed-before-ready")
+      rtcFailure = true
+      if snapshot.state == .streaming { await terminal(.transport) }
+      else { await control?.close() }
+    case .candidate(let mid, let index, let text):
+      if rtcLocalCandidateCount == 0 && rtcCandidates.isEmpty {
+        let parts = text.split(whereSeparator: \.isWhitespace)
+        let udp = parts.count > 7 && parts[2].lowercased() == "udp"
+        let host = parts.count > 7 && parts[6] == "typ" && parts[7] == "host"
+        let v4 = parts.count > 7 && parts[4].split(separator: ".").count == 4 &&
+          parts[4].allSatisfy { $0.isNumber || $0 == "." }
+        let selected = parts.count > 7 && LocalIPv4Address.available().contains {
+          $0.interface == "en0" && $0.address == String(parts[4])
+        }
+        logger.diagnostic("rtc-local-candidate-shape-udp=\(udp)-host=\(host)-v4=\(v4)-en0=\(selected)")
+      }
+      guard rtcCandidates.count < 64,
+        mid == rtcMid || !rtcOfferWritten,
+        text.utf8.count <= 2048 else {
+        logger.diagnostic("rtc-peer-candidate-boundary-failed")
+        rtcFailure = true; await control?.close(); return
+      }
+      rtcCandidates.append((mid, index, text))
+      if rtcOfferWritten {
+        do { try await rtcFlushCandidates(attempt: attempt) }
+        catch { logger.diagnostic("rtc-local-ice-write-failed"); rtcFailure = true; await control?.close() }
+      }
+    case .connected: break
+    }
+  }
+  private func rtcFlushCandidates(attempt: AttemptIdentity) async throws {
+    guard let writer = rtcWriter else { throw HostFailure.invalidState }
+    while !rtcCandidates.isEmpty {
+      try valid(attempt)
+      let (mid, index, text) = rtcCandidates.removeFirst()
+      guard mid == rtcMid, index == 0 else { throw HostFailure.malformed }
+      try await writer.send(RtcSignal.message(.rtcIceCandidate, session: sessionId,
+        epoch: epoch, attempt: rtcAttempt,
+        fields: [.text(mid), .integer(UInt64(index)), .text(text)]))
+      rtcLocalCandidateCount += 1
+      if rtcLocalCandidateCount == 1 || rtcLocalCandidateCount.isMultiple(of: 16) {
+        logger.diagnostic("rtc-local-candidates-\(rtcLocalCandidateCount)")
+      }
+    }
+  }
+  private func rtcExpire(attempt: AttemptIdentity) async {
+    guard incarnation == attempt.incarnation, epoch == attempt.epoch,
+      snapshot.state != .streaming && snapshot.state != .stopping else { return }
+    rtcTimedOut = true
+    await control?.close()
+    await rtcPeer?.stop()
+  }
+  private func rtcArmDeadline(_ duration: Duration, attempt: AttemptIdentity) {
+    rtcTimer?.cancel()
+    rtcTimer = Task { [weak self] in
+      try? await Task.sleep(for: duration)
+      if !Task.isCancelled { await self?.rtcExpire(attempt: attempt) }
+    }
+  }
+
   private func prepareExactDisplay(
     _ greeting: ClientGreeting, attempt: AttemptIdentity
   ) async throws -> (NegotiatedConfig, ActiveDisplay) {
@@ -287,7 +602,7 @@ public actor SessionCoordinator {
       throw HostFailure.incompatible
     }
     try valid(attempt)
-    snapshot.clientMode = "1600x2456 @ 60 Hz (client readback)"
+    snapshot.clientMode = "1600x2456 @ \(readiness.mode.milliHz / 1000) Hz (client readback)"
     snapshot.video =
       "Requested hardware \(config.codec == .avc ? "AVC" : "HEVC") \(config.bitrate / 1_000_000) Mbit/s"
     return VideoBarrier(channel: videoChannel, order: order, route: route)
@@ -305,16 +620,19 @@ public actor SessionCoordinator {
     metrics = stageMetrics
     let stageTiming = HostVideoTiming(epoch: channelEpoch, generation: nextGeneration)
     videoTiming = stageTiming
+    let trace = HostLatencyTrace(
+      sessionId: sessionId, epoch: channelEpoch, generation: nextGeneration)
+    latencyTrace = trace
     timingReportSamples = 0
     timingReportLockMaxNs = 0
     timingReportFormatMaxNs = 0
     timingReportLogMaxNs = 0
     let sink = MirriVideoSink(
       channel: barrier.channel, sessionId: sessionId, epoch: channelEpoch,
-      generation: nextGeneration, config: config)
+      generation: nextGeneration, config: config, latencyTrace: trace)
     let pipeline = CapturePipeline(
       settings: EncodingSettings(codec: config.codec, bitrate: config.bitrate),
-      sink: sink, timing: stageTiming,
+      sink: sink, timing: stageTiming, latencyTrace: trace,
       onFailure: { [weak self] cause in
         Task {
           await self?.failTransport(
@@ -339,7 +657,9 @@ public actor SessionCoordinator {
     try valid(attempt)
     try await pipeline.start(display: active)
     try valid(attempt)
-    stageTiming.activate()
+    let startedNs = DispatchTime.now().uptimeNanoseconds
+    stageTiming.activate(atNs: startedNs)
+    trace.activate(atNs: startedNs)
     snapshot.video =
       "Hardware \(config.codec == .avc ? "AVC" : "HEVC") \(config.bitrate / 1_000_000) Mbit/s (configured)"
     input = InputController(
@@ -369,13 +689,27 @@ public actor SessionCoordinator {
     await oldRoute?.interrupt()
     await oldControl?.close()
     await oldVideo?.close()
+    await rtcPeer?.stop()
   }
   private func updateMetrics(id: UInt64, channelEpoch: UInt32) async {
     guard incarnation == id, epoch == channelEpoch, snapshot.state == .streaming else { return }
-    let reports = metrics.snapshotWithPending(queue: capture?.queueDepth ?? 0)
-    snapshot.metrics = reports.summary
-    logger.metrics(snapshot.metrics)
-    logger.metrics(reports.pending)
+    if let rtcPeer {
+      let media = await rtcPeer.mediaStatus()
+      guard media == .ready else {
+        logger.diagnostic("rtc-media-\(media.rawValue)")
+        await terminal(media == .codecOrGeometry ? .hardwareCodec : .transport)
+        return
+      }
+      let rtt = rtcRttMs.map { String(format: "%.1f ms", $0) } ?? "unavailable"
+      snapshot.metrics = rtcPeer.metricsSummary()
+        + " / control RTT \(rtt) / tablet-display and cross-device one-way latency unavailable"
+      logger.metrics(snapshot.metrics)
+    } else {
+      let reports = metrics.snapshotWithPending(queue: capture?.queueDepth ?? 0)
+      snapshot.metrics = reports.summary
+      logger.metrics(snapshot.metrics)
+      logger.metrics(reports.pending)
+    }
     if let videoTiming {
       let measured = videoTiming.snapshotMeasured()
       let logStart = DispatchTime.now().uptimeNanoseconds
@@ -396,6 +730,7 @@ public actor SessionCoordinator {
         timingReportLogMaxNs = 0
       }
     }
+    if let latencyTrace { logger.metrics(latencyTrace.report()) }
     await status(snapshot)
     guard incarnation == id, epoch == channelEpoch, snapshot.state == .streaming else { return }
     let now = DispatchTime.now().uptimeNanoseconds
@@ -410,9 +745,10 @@ public actor SessionCoordinator {
       let sent = now
       pendingPing = (sequence, sent)
       do {
-        try await control.send(
-          HostCommand.ping(sequence: sequence, sent: sent).wire(
-            sessionId: sessionId, epoch: epoch))
+        let ping = HostCommand.ping(sequence: sequence, sent: sent).wire(
+          sessionId: sessionId, epoch: epoch)
+        if let rtcWriter { try await rtcWriter.send(ping) }
+        else { try await control.send(ping) }
       } catch {
         await failTransport(id: id, channelEpoch: channelEpoch, source: "heartbeat-send")
       }
@@ -455,6 +791,64 @@ public actor SessionCoordinator {
       }
     }
   }
+  private func readRtcControl(
+    _ channel: WireConnection, order initial: WireOrder, attempt: AttemptIdentity
+  ) async {
+    var order = initial
+    var lastKind: UInt16 = 0
+    do {
+      while incarnation == attempt.incarnation, epoch == attempt.epoch,
+        snapshot.state == .streaming || snapshot.state == .preparingClient ||
+          stopAckReaderId == attempt.incarnation
+      {
+        let record = try await channel.read()
+        switch record {
+        case .skipped(let sequence): try order.skipUnknown(sequence: sequence)
+        case .message(let message):
+          lastKind = message.type
+          if (23...31).contains(message.type), message.fields.count >= 2,
+            (try RtcSignal.number(message.fields[1])) < UInt64(attempt.epoch) {
+            try order.skipStaleRtc(message)
+            continue
+          }
+          try order.accept(message)
+          if message.type == MessageKind.stopAcknowledged.rawValue,
+            stopAckReaderId == attempt.incarnation {
+            stopAckReceived = true
+            stopAckReaderId = nil
+            stopAckContinuation?.resume()
+            stopAckContinuation = nil
+            return
+          }
+          if message.type == MessageKind.rtcIceCandidate.rawValue ||
+            message.type == MessageKind.rtcIceEnd.rawValue {
+            try await rtcRemoteIce(message, attempt: attempt)
+          } else {
+            guard snapshot.state == .streaming else { throw HostFailure.malformed }
+            guard [.inputBatch, .scroll, .zoom, .contextClick, .shortcut,
+              .auxiliaryKey, .pong, .stopAcknowledged, .protocolError,
+              .sessionRejected].contains(MessageKind(rawValue: message.type)) else {
+              throw HostFailure.malformed
+            }
+            let event = try ClientEvent.decode(message)
+            try await handleClientEvent(event, attempt: attempt)
+          }
+        }
+      }
+    } catch {
+      logger.diagnostic("rtc-control-rejected-kind-\(lastKind)-error-\(type(of: error))"
+        + "-host=\((error as? HostFailure).map(String.init(describing:)) ?? "none")")
+      if incarnation == attempt.incarnation, epoch == attempt.epoch,
+        snapshot.state == .streaming {
+        await terminal((error as? WireFailure) == .unsupported ? .version : .malformed)
+      }
+      else if incarnation == attempt.incarnation, epoch == attempt.epoch,
+        snapshot.state == .preparingClient {
+        rtcFailure = true
+        await channel.close()
+      }
+    }
+  }
   private func handleClientEvent(
     _ event: ClientEvent, attempt: AttemptIdentity
   ) async throws {
@@ -479,10 +873,13 @@ public actor SessionCoordinator {
       decoderFailures += 1
       guard decoderFailures <= 1 else { throw HostFailure.hardwareCodec }
       throw HostFailure.transport
-    case .pong(let sequence, let sent):
+    case .pong(let sequence, let sent, let received, let replied):
       if let pendingPing, sequence == pendingPing.sequence, sent == pendingPing.sent {
         let now = DispatchTime.now().uptimeNanoseconds
-        metrics.roundTrip(milliseconds: Double(now - sent) / 1e6)
+        if rtcPeer != nil { rtcRttMs = Double(now - sent) / 1e6 }
+        else { metrics.roundTrip(milliseconds: Double(now - sent) / 1e6) }
+        latencyTrace?.pong(
+          sequence: sequence, t1: sent, t2: received, t3: replied, t4: now)
         self.pendingPing = nil
       }
     case .stopAcknowledged: break
@@ -497,10 +894,12 @@ public actor SessionCoordinator {
   }
   public func transportClosed(id: UInt64, channelEpoch: UInt32) async {
     guard incarnation == id, epoch == channelEpoch, snapshot.state == .streaming else { return }
+    if rtcPeer != nil { await terminal(.transport); return }
     // Claim transition before any await: EOF, encoder callbacks and ping timeouts
     // may arrive together, but exactly one cleanup owns this epoch.
     snapshot.state = .waitingForReconnect
     videoTiming?.freeze()
+    latencyTrace?.freeze()
     reconnectUntil = ContinuousClock.now.advanced(by: .seconds(preferences.graceSeconds))
     input?.reset()
     input = nil
@@ -510,6 +909,8 @@ public actor SessionCoordinator {
     capture = nil
     let oldTiming = videoTiming
     videoTiming = nil
+    let oldTrace = latencyTrace
+    latencyTrace = nil
     let oldControl = control
     control = nil
     let oldVideo = video
@@ -522,6 +923,7 @@ public actor SessionCoordinator {
     let teardown = Task {
       await oldCapture?.stop()
       if let oldTiming { logger.metrics(oldTiming.finish()) }
+      if let oldTrace { logger.metrics(oldTrace.report(final: true)) }
       await oldControl?.close()
       await oldVideo?.close()
     }
@@ -558,8 +960,8 @@ public actor SessionCoordinator {
         else { return }
         if let failure = error as? HostFailure {
           switch failure {
-          case .unauthorized, .malformed, .incompatible, .exactDisplay, .hardwareCodec,
-            .permission, .reverseConflict:
+          case .unauthorized, .malformed, .version, .incompatible, .exactDisplay, .hardwareCodec,
+            .permission:
             await terminal(failure)
             return
           default: break
@@ -574,6 +976,8 @@ public actor SessionCoordinator {
         capture = nil
         let oldTiming = videoTiming
         videoTiming = nil
+        let oldTrace = latencyTrace
+        latencyTrace = nil
         let oldControl = control
         control = nil
         let oldVideo = video
@@ -583,6 +987,7 @@ public actor SessionCoordinator {
         let teardown = Task {
           await oldCapture?.stop()
           if let oldTiming { logger.metrics(oldTiming.finish()) }
+          if let oldTrace { logger.metrics(oldTrace.report(final: true)) }
           await oldControl?.close()
           await oldVideo?.close()
         }
@@ -621,6 +1026,7 @@ public actor SessionCoordinator {
     let transition = incarnation
     snapshot.state = .stopping
     videoTiming?.freeze()
+    latencyTrace?.freeze()
     input?.reset()
     input = nil
     let completion = Task { await self.completeStop(transition: transition, readerId: readerId) }
@@ -630,7 +1036,11 @@ public actor SessionCoordinator {
   private func completeStop(transition: UInt64, readerId: UInt64) async {
     await state(.stopping, "Stopping stream, releasing input and owned resources")
     if let control, incarnation == transition {
-      try? await control.send(HostCommand.stop.wire(sessionId: sessionId, epoch: epoch))
+      if let rtcWriter {
+        try? await rtcWriter.send(HostCommand.stop.wire(sessionId: sessionId, epoch: epoch))
+      } else {
+        try? await control.send(HostCommand.stop.wire(sessionId: sessionId, epoch: epoch))
+      }
       if stopAckReaderId == readerId { await awaitStopAck(transition: transition) }
     }
     guard incarnation == transition else { return }
@@ -664,6 +1074,7 @@ public actor SessionCoordinator {
     let transition = incarnation
     snapshot.state = .stopping
     videoTiming?.freeze()
+    latencyTrace?.freeze()
     input?.reset()
     input = nil
     logger.error(failure)
@@ -681,12 +1092,14 @@ public actor SessionCoordinator {
         case .hardwareCodec: 5
         case .timeout: 8
         case .malformed: 1
+        case .version: 2
         case .unauthorized: 3
         default: 6
         }
-      try? await control.send(
-        HostCommand.error(code: code, description: failure.localizedDescription).wire(
-          sessionId: sessionId, epoch: epoch))
+      let record = HostCommand.error(code: code, description: failure.localizedDescription).wire(
+        sessionId: sessionId, epoch: epoch)
+      if let rtcWriter { try? await rtcWriter.send(record) }
+      else { try? await control.send(record) }
     }
     if incarnation == transition { await state(.stopping, failure.localizedDescription) }
     guard incarnation == transition else { return }
@@ -694,6 +1107,15 @@ public actor SessionCoordinator {
     if incarnation == transition { await state(.failed, failure.localizedDescription) }
   }
   private func release() async {
+    rtcTimer?.cancel(); rtcTimer = nil
+    rtcEvents?.cancel(); rtcEvents = nil
+    let oldPeer = rtcPeer; rtcPeer = nil
+    rtcWriter = nil
+    rtcAttempt = Data()
+    rtcCandidates = []
+    rtcRemote = RtcIceLedger()
+    rtcOfferWritten = false
+    rtcRttMs = nil
     tick?.cancel()
     tick = nil
     controlReader?.cancel()
@@ -709,6 +1131,8 @@ public actor SessionCoordinator {
     capture = nil
     let oldTiming = videoTiming
     videoTiming = nil
+    let oldTrace = latencyTrace
+    latencyTrace = nil
     let oldVideo = video
     video = nil
     let oldControl = control
@@ -724,13 +1148,15 @@ public actor SessionCoordinator {
     sessionId.removeAll()
     reconnectUntil = nil
     await pendingTeardown?.value
+    await oldPeer?.stop()
     await oldCapture?.stop()
     if let oldTiming { logger.metrics(oldTiming.finish()) }
+    if let oldTrace { logger.metrics(oldTrace.report(final: true)) }
     await oldVideo?.close()
     await oldControl?.close()
     await oldDisplay?.destroy()
     await oldRoute?.close()
     snapshot.virtualMode = "Not active (requested 2456x1600 @ 60 Hz)"
-    snapshot.clientMode = "Not reported (required 1600x2456 @ 60 Hz)"
+    snapshot.clientMode = "Not reported (required 1600x2456 @ 60 or 120 Hz)"
   }
 }

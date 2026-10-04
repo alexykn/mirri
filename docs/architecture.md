@@ -104,7 +104,10 @@ small media configuration value rather than passing the entire session contract.
 * Four host admission credits, held from capture admission through completed
   downstream write; no unbounded task creation or implicit buffering.
 * ScreenCaptureKit queue depth two, native cadence (`minimumFrameInterval = .zero`),
-  exact 2456×1600 NV12 capture, existing hardware encoder/GOP/latency settings.
+  exact 2456×1600 NV12 capture. AVC uses hardware low-latency rate control,
+  High AutoLevel and an infinite GOP; HEVC retains its existing GOP60 settings.
+  Decoder resynchronization recreates the codec generation and initial IDR.
+  See `latency-measurement.md` for the provisional measured AVC decision.
 * Existing Android decoder operating rate and low-latency configuration, bounded
   direct-buffer pool, reusable video metadata, freshness and discontinuity rules.
 * Independent control/video channels, ordered control writes and the finite
@@ -158,6 +161,30 @@ Retain the existing wire fixtures and direct-buffer tests. Do not duplicate the
 production implementation in a test harness.
 
 ## Implementation status
+
+* **2026-10-04 smoothness changes (measured on the TXZ-W09 over Wi-Fi, 90 s
+  owned-display motion, SurfaceFlinger present times as ground truth):**
+  the virtual display runs at 120 Hz with a 60 fps capture rate limiter;
+  ScreenCaptureKit's surface pool is 6; the tablet stamps each release 24 ms
+  ahead and one refresh apart; the video socket disables Nagle; WebRTC uses
+  low-latency VideoToolbox rate control, an 8 Mbit/s start estimate and zero
+  forced playout delay, and is the default media path. The tablet prefers a
+  120 Hz panel mode but this device's vendor policy caps the app at 90 Hz, so
+  it falls back to 60 Hz. Results: frames shown for exactly one refresh rose
+  from 76% (47.3 presents/s) to 98.5% (58.2/s) on TLS/TCP and 99.7% (59.7/s)
+  on WebRTC over 90 s, and 99.2% (59.3/s) on a 5-minute WebRTC run once the
+  adaptive bitrate floor was raised to 6 Mbit/s (at a 1 Mbit/s floor the
+  estimate fell to ~3 Mbit/s twice and the encoder dropped up to half the
+  frames). A touch makes this tablet switch its panel to 90 Hz for about four
+  seconds; the app cannot prevent that. Earlier "preservation" notes about queue depth two and an exact
+  60 Hz virtual display are superseded. WebRTC cross-device latency, 30-minute
+  endurance and unplugged operation remain unmeasured. Evidence and the run
+  scripts are in ignored `artifacts/smoothness-2026-10-04/`.
+
+* **2026-10-04: the USB streaming route was removed.** `USBConnectionRoute`,
+  `AdbReverseManager`, the `usb` launch mode and Android's production loopback
+  connector are gone; `USBDeviceService` keeps discovery, install and the
+  first network launch. Entries below that describe the USB route are history.
 
 * Source quality and complexity gates: implemented and verified in `a518fd2`.
 * Host route/device split: `USBDeviceService` owns discovery, installation,

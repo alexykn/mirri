@@ -29,10 +29,8 @@ public protocol HostConnectionRoute: AnyObject, Sendable {
 }
 
 extension HostConnectionRoute {
-  public var transportDescription: String {
-    "Binding 127.0.0.1 and creating owned ADB reverse mappings"
-  }
-  public var streamingDescription: String { "Streaming over USB" }
+  public var transportDescription: String { "Preparing connection" }
+  public var streamingDescription: String { "Streaming" }
   public var waitingDescription: String {
     "Launching client and waiting for authenticated hello"
   }

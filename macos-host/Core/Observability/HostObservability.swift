@@ -94,6 +94,7 @@ public final class MetricsCollector: @unchecked Sendable {
       case .formatMismatch: wrongFormat += 1
       case .creditFull: creditFull += 1
       case .encodeSubmitFailure: submitFailure += 1
+      case .overRate: break  // Deliberate halving of faster-than-stream content.
       }
     }
   }
@@ -154,7 +155,7 @@ public final class MetricsCollector: @unchecked Sendable {
     let cadence = midpointAndP95(completeGapsMs)
     let summary = String(
       format:
-        "capture %.1f fps (admitted %.1f, skipped %d) / encode %.1f fps (%.1f/%.1f/%.1f ms) / USB %.1f fps %.1f Mbit/s (depth %d) / %@ / input %.1f/s (resets %d, RTT %.1f ms) / host submit-to-write %d samples %.1f/%.1f ms, convert-to-write %.1f/%.1f ms / skip idle=%d format=%d credit=%d submit=%d / VT call %d samples %.1f/%.1f ms / SC complete=%d idle=%d blank=%d suspended=%d started=%d stopped=%d unknown=%d PTSgap %d samples %.1f/%.1f ms >25ms=%d / cumulative complete=%d sent=%d elapsed=%.2fs",
+        "capture %.1f fps (all callbacks; admitted %.1f, skipped %d) / encode %.1f fps (%.1f/%.1f/%.1f ms) / sent %.1f fps %.1f Mbit/s (depth %d) / %@ / input %.1f/s (resets %d, RTT %.1f ms) / host submit-to-write %d samples %.1f/%.1f ms, convert-to-write %.1f/%.1f ms / skip idle=%d format=%d credit=%d submit=%d / VT call %d samples %.1f/%.1f ms / SC complete=%d idle=%d blank=%d suspended=%d started=%d stopped=%d unknown=%d PTSgap %d samples %.1f/%.1f ms >25ms=%d / actual complete %.1f fps / cumulative complete=%d sent=%d elapsed=%.2fs",
       Double(capture) / seconds, Double(admitted) / seconds, rejected, Double(encoded) / seconds,
       median, p95, worst, Double(sent) / seconds,
       Double(sentBytes) * 8 / seconds / 1e6, queue, client, Double(input) / seconds,
@@ -164,6 +165,7 @@ public final class MetricsCollector: @unchecked Sendable {
       complete, idleStatus, blankStatus, suspendedStatus, startedStatus, stoppedStatus,
       missingStatus, completeGapsMs.count, cadence.0, cadence.1,
       completeGapsMs.filter { $0 > 25 }.count,
+      Double(complete) / seconds,
       totalComplete, totalSent, Double(now - startedAt) / 1e9)
     let pending = String(
       format:

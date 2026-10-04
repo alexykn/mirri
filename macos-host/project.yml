@@ -7,6 +7,9 @@ settings:
     SWIFT_VERSION: "6.0"
     CODE_SIGNING_ALLOWED: NO
 packages:
+  webrtc-xcframework:
+    url: https://github.com/livekit/webrtc-xcframework.git
+    version: 150.7871.02
   swift-certificates:
     url: https://github.com/apple/swift-certificates.git
     version: 1.21.0
@@ -23,6 +26,8 @@ targets:
     sources:
       - Core
     dependencies:
+      - package: webrtc-xcframework
+        product: LiveKitWebRTC
       - target: VirtualDisplayShim
         link: true
       - package: swift-certificates
@@ -52,12 +57,14 @@ targets:
     dependencies:
       - target: MirriHostCore
       - target: VirtualDisplayShim
+      - package: webrtc-xcframework
+        product: LiveKitWebRTC
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.mirri.host
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
-        INFOPLIST_KEY_NSScreenCaptureUsageDescription: Mirri displays this Mac's extended desktop on your USB tablet.
+        INFOPLIST_KEY_NSScreenCaptureUsageDescription: Mirri displays this Mac's extended desktop on your tablet.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Mirri connects to the selected tablet over the explicitly chosen local IPv4 address in Network (USB setup) mode.
         INFOPLIST_KEY_LSUIElement: YES
   MirriHostTests:

@@ -75,6 +75,7 @@ class VideoTimingOwner(
         val sequence: Long,
         val packetNs: Long,
         val keyframe: Boolean,
+        var trace: ClientLatencyTrace.Sample? = null,
         var inputQueuedNs: Long? = null,
         var outputAvailableNs: Long? = null,
     )
@@ -86,6 +87,7 @@ class VideoTimingOwner(
         val sequence: Long,
         val packetNs: Long,
         val releasedNs: Long,
+        var trace: ClientLatencyTrace.Sample? = null,
     )
 
     private val stages =
@@ -136,6 +138,7 @@ class VideoTimingOwner(
     private val outputGaps = ReorderedFrameGaps(stages.getValue(Stage.OUTPUT_GAP), stages.getValue(Stage.KEY_OUTPUT_GAP))
     private val renderGaps = ReorderedFrameGaps(stages.getValue(Stage.RENDER_GAP))
     private var generation: UInt? = null
+    private var latencyTrace: ClientLatencyTrace? = null
     private var closed = false
     private var timingEnabled = true
     private var finalSummary: Summary? = null
@@ -143,6 +146,8 @@ class VideoTimingOwner(
     private var epoch: UInt? = null
     private var started = false
     private var windowEnded = false
+    private var latencyEndNs: Long? = null
+    private var latencyFinalReported = false
     private var intervalStartNs = 0L
     private var rightCensored = 0L
     private var interiorPending = 0L
@@ -163,12 +168,22 @@ class VideoTimingOwner(
         if (epoch == null) epoch = value else check(epoch == value)
     }
 
+    /** Validated SessionConfig identity, never logged raw. */
+    @Synchronized fun setTraceIdentity(
+        id: ByteArray,
+        route: String = "usb",
+    ) {
+        check(latencyTrace == null && id.size == 16)
+        latencyTrace = ClientLatencyTrace(id, route)
+    }
+
     /** Activate only after StartStream; no pre-stream setup time or callback
      * enters the first interval. Decoder input-index callbacks may predate it. */
     @Synchronized fun activate(atNs: Long = System.nanoTime()) {
         if (started || windowEnded) return
         started = true
         intervalStartNs = atNs
+        latencyTrace?.activate(atNs)
         stages.values.forEach { it.drain() }
         counts.keys.forEach { counts[it] = 0 }
         if (!renderListenerInstalled) count("renderListenerUnavailable")
@@ -186,6 +201,8 @@ class VideoTimingOwner(
         if (windowEnded) return
         if (!started) activate(atNs)
         windowEnded = true
+        latencyEndNs = atNs
+        finishLatencyPending()
         for (frame in pendingRenders.values) {
             val release = frame.releasedNs
             if (release <= atNs && atNs - release <= TAIL_CENSOR_NS) rightCensored++ else interiorPending++
@@ -217,6 +234,7 @@ class VideoTimingOwner(
      * do not join any later-generation frame metadata, even after >64 PTS. */
     @Synchronized fun startGeneration(next: UInt) {
         if (closed || windowEnded) return
+        finishLatencyPending()
         outputGaps.finish()
         renderGaps.finish()
         stages.values.forEach(TimingHistogram::finishGapRun)
@@ -298,7 +316,14 @@ class VideoTimingOwner(
         }
         if (wirePtsNs % 1000 != 0L) count("truncatedPts")
         if (frames.size + pendingRenders.size >= capacity) evictOldestFrame()
-        frames[codecPtsUs] = Frame(g, sequence, packetNs, keyframe)
+        frames[codecPtsUs] =
+            Frame(
+                g,
+                sequence,
+                packetNs,
+                keyframe,
+                trace = latencyTrace?.select(g, sequence, codecPtsUs, packetNs),
+            )
         highWater = maxOf(highWater, frames.size + pendingRenders.size)
     }
 
@@ -327,12 +352,14 @@ class VideoTimingOwner(
         if (pendingRenders.isNotEmpty()) {
             val evicted = pendingRenders.entries.first()
             pendingRenders.remove(evicted.key)
+            latencyTrace?.complete(evicted.value.trace, ClientLatencyTrace.Reason.CENSORED)
             rememberExpired(evicted.key)
             count("missingRender")
         } else {
             // Only an actual pre-release backlog may displace an active frame.
             val evicted = frames.entries.first()
             frames.remove(evicted.key)
+            latencyTrace?.complete(evicted.value.trace, ClientLatencyTrace.Reason.AMBIGUOUS)
             rememberExpired(evicted.key)
         }
         count("overflow")
@@ -350,6 +377,7 @@ class VideoTimingOwner(
             if (nowNs < entry.value.packetNs || nowNs - entry.value.packetNs < METADATA_TTL_NS) continue
             count("expired")
             rememberExpired(entry.key)
+            latencyTrace?.complete(entry.value.trace, ClientLatencyTrace.Reason.AMBIGUOUS)
             iterator.remove()
         }
         val pending = pendingRenders.entries.iterator()
@@ -359,6 +387,7 @@ class VideoTimingOwner(
             count("missingRender")
             count("expired")
             rememberExpired(entry.key)
+            latencyTrace?.complete(entry.value.trace, ClientLatencyTrace.Reason.CENSORED)
             pending.remove()
         }
     }
@@ -432,6 +461,7 @@ class VideoTimingOwner(
         }
         duration(Stage.PACKET_TO_INPUT, frame.packetNs, atNs)
         frame.inputQueuedNs = atNs
+        frame.trace?.inputNs = atNs
         count("queued")
     }
 
@@ -450,6 +480,7 @@ class VideoTimingOwner(
             }
         } ?: count("unmatched")
         frame.outputAvailableNs = atNs
+        frame.trace?.outputNs = atNs
         outputGaps.add(frame.sequence, atNs, atNs, frame.keyframe)
         if (frame.keyframe) count("keyOutput")
         count("output")
@@ -465,8 +496,10 @@ class VideoTimingOwner(
         duration(Stage.RELEASE_CALL, requestNs, returnedNs)
         duration(Stage.PACKET_TO_RELEASE, frame.packetNs, requestNs)
         frames.remove(ptsUs)
+        frame.trace?.releaseRequestNs = requestNs
+        frame.trace?.releaseNs = returnedNs
         pendingRenders[ptsUs] =
-            PendingRender(frame.generation, frame.sequence, frame.packetNs, requestNs)
+            PendingRender(frame.generation, frame.sequence, frame.packetNs, requestNs, frame.trace)
         totalReleased++
         count("released")
     }
@@ -495,7 +528,12 @@ class VideoTimingOwner(
             )
             return
         }
-        recordRenderTiming(frame, renderedNs, callbackArrivalNs)
+        val validRender = recordRenderTiming(frame, renderedNs, callbackArrivalNs)
+        if (validRender) frame.trace?.renderNs = renderedNs
+        latencyTrace?.complete(
+            frame.trace,
+            if (validRender) ClientLatencyTrace.Reason.RENDERED else ClientLatencyTrace.Reason.AMBIGUOUS,
+        )
         pendingRenders.remove(ptsUs)
         renderedPts.add(ptsUs)
         if (renderedPts.size > 64) renderedPts.remove(renderedPts.first())
@@ -507,7 +545,7 @@ class VideoTimingOwner(
         frame: PendingRender,
         renderedNs: Long,
         callbackArrivalNs: Long,
-    ) {
+    ): Boolean {
         val validRelease = duration(Stage.RELEASE_TO_RENDER, frame.releasedNs, renderedNs)
         val validPacket = duration(Stage.PACKET_TO_RENDER, frame.packetNs, renderedNs)
         val validCallback = duration(Stage.RENDER_CALLBACK_DELAY, renderedNs, callbackArrivalNs)
@@ -517,6 +555,7 @@ class VideoTimingOwner(
         } else {
             count("renderInvalid")
         }
+        return validRelease && validPacket && validCallback
     }
 
     private fun countMissingRenders() {
@@ -531,6 +570,33 @@ class VideoTimingOwner(
         pendingRenders.clear()
         indexAvailable.clear()
         renderedPts.clear()
+    }
+
+    /** Retire trace joins only when the authoritative metadata itself retires.
+     * A slow render must survive periodic reporting (up to the owner's 30s TTL). */
+    private fun finishLatencyPending() {
+        for (frame in frames.values) {
+            val sample = frame.trace ?: continue
+            latencyTrace?.complete(sample, ClientLatencyTrace.Reason.AMBIGUOUS)
+            frame.trace = null
+        }
+        for (frame in pendingRenders.values) {
+            val sample = frame.trace ?: continue
+            latencyTrace?.complete(sample, ClientLatencyTrace.Reason.CENSORED)
+            frame.trace = null
+        }
+    }
+
+    @Synchronized fun drainLatencyLine(
+        atNs: Long = System.nanoTime(),
+        final: Boolean = false,
+    ): String? {
+        val trace = latencyTrace ?: return null
+        val mayReport = if (final) !latencyFinalReported else !windowEnded && !closed
+        if (!started || !mayReport) return null
+        if (final) latencyFinalReported = true
+        if (final && !windowEnded) finishLatencyPending()
+        return trace.report(epoch ?: 0u, generation, final, if (final) latencyEndNs ?: atNs else atNs)
     }
 
     @Synchronized fun drain(nowNs: Long = System.nanoTime()): Summary {

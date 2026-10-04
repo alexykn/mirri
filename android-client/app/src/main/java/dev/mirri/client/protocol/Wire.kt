@@ -78,6 +78,15 @@ object WireCodec {
             20 to "generation",
             21 to "rejectReason str128",
             22 to "",
+            23 to "rtcVersion bytes16 codec rtcProfile rtcLevel bool bool",
+            24 to "rtcVersion bytes16 bytes16 codec rtcProfile rtcLevel size u32 color",
+            25 to "rtcVersion bytes16 mode size str96",
+            26 to "rtcVersion bytes16 utf8sdp",
+            27 to "rtcVersion bytes16 utf8sdp",
+            28 to "rtcVersion bytes16 str32 u16 utf8candidate",
+            29 to "rtcVersion bytes16 str32 u16",
+            30 to "rtcVersion bytes16",
+            31 to "rtcVersion bytes16",
         )
 
     private fun bad(): Nothing = throw WireException("malformed wire record")
@@ -92,9 +101,11 @@ object WireCodec {
 
     private fun exactPhysicalMode(v: Value): Boolean {
         val fields = (v as? Value.Object)?.value ?: bad()
-        return fields.size == 3 && size(fields[0]) == (1600uL to 2456uL) && number(fields[1]) == 60000uL
+        // Panel refresh only: 60 Hz, or 120 Hz showing the 60 fps stream on finer vsync slots.
+        return fields.size == 3 && size(fields[0]) == (1600uL to 2456uL) && number(fields[1]) in setOf(60000uL, 120000uL)
     }
 
+    @Suppress("CyclomaticComplexMethod")
     private fun validate(message: WireMessage) {
         val f = message.fields
         when (message.type) {
@@ -106,6 +117,8 @@ object WireCodec {
                 val au = (f[6] as? Value.Bytes)?.value ?: bad()
                 if (au.size < 5 || !au.copyOfRange(0, 4).contentEquals(byteArrayOf(0, 0, 0, 1))) bad()
             }
+            24 -> if (size(f[8]) != (2456uL to 1600uL) || number(f[9]) != 60000uL) bad()
+            25 -> if (size(f[5]) != (2456uL to 1600uL) || !exactPhysicalMode(f[4])) bad()
         }
     }
 
@@ -138,6 +151,13 @@ object WireCodec {
 
     private fun cap(type: Int) =
         when (type) {
+            23 -> 43
+            24 -> 70
+            25 -> 160
+            26, 27 -> 32808
+            28 -> 2124
+            29 -> 74
+            30, 31 -> 38
             6 -> 16_777_261
             4, 5 -> 65_536
             else -> 1_048_576
@@ -147,7 +167,7 @@ object WireCodec {
         when (t) {
             "u64" -> 8
             "u32", "epoch", "generation", "dimension", "refresh" -> 4
-            "level", "port", "buttons" -> 2
+            "level", "port", "buttons", "rtcVersion", "u16" -> 2
             else -> 1
         }
 
@@ -176,6 +196,8 @@ object WireCodec {
             "gesturePhase", "stopReason" -> 1uL..4uL
             "contextSource", "tool" -> 1uL..3uL
             "shortcut", "rejectReason" -> 1uL..5uL
+            "rtcProfile" -> 2uL..2uL
+            "rtcLevel" -> 51uL..52uL
             "pointerPhase" -> 1uL..7uL
             "errorCode" -> 1uL..8uL
             "frameFlags" -> 0uL..3uL
@@ -215,14 +237,18 @@ object WireCodec {
     private fun stringLimit(t: String): Int? =
         when (t) {
             "str64" -> 64
+            "str32" -> 32
             "str96" -> 96
             "str128" -> 128
             else -> null
         }
 
+    @Suppress("CyclomaticComplexMethod", "ComplexCondition")
     private fun validateText(
         s: String,
         limit: Int,
+        rtc: Boolean = false,
+        sdp: Boolean = false,
     ): ByteArray {
         val encoder =
             Charsets.UTF_8
@@ -236,7 +262,19 @@ object WireCodec {
                 bad()
             }
         val bytes = ByteArray(encoded.remaining()).also(encoded::get)
-        if (bytes.size > limit || s.any { it.isISOControl() || it == '\uFEFF' }) bad()
+        if (bytes.size > limit ||
+            (rtc && bytes.isEmpty()) ||
+            s.any {
+                it == '\uFEFF' ||
+                    if (rtc) {
+                        it == '\u0000' || it.code in 0x7f..0x9f || (it.code < 32 && !(sdp && (it == '\r' || it == '\n')))
+                    } else {
+                        it.isISOControl()
+                    }
+            }
+        ) {
+            bad()
+        }
         return bytes
     }
 
@@ -286,8 +324,14 @@ object WireCodec {
         t: String,
         value: Value,
     ): Boolean {
-        val max = stringLimit(t) ?: return false
-        val bytes = validateText((value as? Value.Text)?.value ?: bad(), max)
+        val max =
+            stringLimit(t) ?: when (t) {
+                "utf8sdp" -> 32768
+                "utf8candidate" -> 2048
+                else -> return false
+            }
+        val bytes = validateText((value as? Value.Text)?.value ?: bad(), max, t.startsWith("utf8"), t == "utf8sdp")
+        if (t == "str32" && bytes.isEmpty()) bad()
         writeNumber(out, bytes.size.toULong(), 2)
         out.write(bytes)
         return true
@@ -302,6 +346,7 @@ object WireCodec {
             writeNumber(out, ((value as? Value.Signed)?.value ?: bad()).toUInt().toULong(), 4)
             return true
         }
+        if (t == "rtcVersion" && ((value as? Value.Number)?.value ?: bad()) != 1uL) bad()
         if (t !in listOf("unit", "tilt", "orientation", "delta", "scale", "fps")) return false
         val n = (value as? Value.Real)?.value ?: bad()
         validateReal(t, n)
@@ -347,15 +392,22 @@ object WireCodec {
             return n
         }
 
+        @Suppress("CyclomaticComplexMethod")
         fun read(t: String): Value {
             children(t)?.let { return Value.Object(it.map(::read)) }
             list(t)?.let { (max, child) -> return readList(max, child) }
             if (t == "i32") return Value.Signed(number(4).toUInt().toInt())
             if (t in listOf("unit", "tilt", "orientation", "delta", "scale", "fps")) return readReal(t)
-            stringLimit(t)?.let { max -> return readText(max) }
+            stringLimit(t)?.let { max ->
+                val value = readText(max)
+                if (t == "str32" && value.value.isEmpty()) bad()
+                return value
+            }
+            if (t == "utf8sdp" || t == "utf8candidate") return readText(if (t == "utf8sdp") 32768 else 2048, true, t == "utf8sdp")
             if (t == "bytes16" || t == "bytes32") return Value.Bytes(take(if (t == "bytes16") 16 else 32))
             if (t == "param" || t == "au") return readVariableBytes(t)
             val n = number(width(t))
+            if (t == "rtcVersion" && n != 1uL) bad()
             validateNumber(t, n)
             return Value.Number(n)
         }
@@ -381,7 +433,11 @@ object WireCodec {
             return Value.Real(n)
         }
 
-        private fun readText(max: Int): Value.Text {
+        private fun readText(
+            max: Int,
+            rtc: Boolean = false,
+            sdp: Boolean = false,
+        ): Value.Text {
             val length = number(2).toInt()
             if (length > max) bad()
             val decoder =
@@ -395,7 +451,7 @@ object WireCodec {
                 } catch (_: Exception) {
                     bad()
                 }
-            validateText(s, max)
+            validateText(s, max, rtc, sdp)
             return Value.Text(s)
         }
     }

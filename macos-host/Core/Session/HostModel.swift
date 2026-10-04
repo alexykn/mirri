@@ -2,7 +2,7 @@ import Foundation
 
 public enum HostFailure: Error, LocalizedError, Sendable, Equatable {
   case permission, adb, unauthorized, incompatible, exactDisplay, hardwareCodec, transport
-  case invalidState, timeout, malformed, reverseConflict
+  case invalidState, timeout, malformed, version
   public var errorDescription: String? {
     switch self {
     case .permission: "Grant Screen Recording and Accessibility, then restart Mirri if prompted"
@@ -15,8 +15,7 @@ public enum HostFailure: Error, LocalizedError, Sendable, Equatable {
     case .invalidState: "Invalid session transition"
     case .timeout: "Session handshake timed out"
     case .malformed: "Invalid protocol message"
-    case .reverseConflict:
-      "ADB reverse tcp:5560/5561 already exists; inspect and explicitly clean up these ports on the selected USB tablet"
+    case .version: "Incompatible RTC signaling version"
     }
   }
 }
@@ -31,7 +30,7 @@ public struct HostSnapshot: Sendable {
   public var message = "Attach an authorized USB tablet"
   public var device = "None"
   public var virtualMode = "Not active (requested 2456x1600 @ 60 Hz)"
-  public var clientMode = "Not reported (required 1600x2456 @ 60 Hz)"
+  public var clientMode = "Not reported (required 1600x2456 @ 60 or 120 Hz)"
   public var video = "Hardware AVC 40 Mbit/s requested"
   public var metrics = "Capture / encode / transport / client: —"
   public init() {}
@@ -55,13 +54,16 @@ public struct HostPreferences: Sendable {
   public let avcBitrate: UInt32
   public let hevcBitrate: UInt32
   public let graceSeconds: Int
+  /// WebRTC video only: let congestion control move the bitrate below the ceiling.
+  public let adaptiveBitrate: Bool
   public init(
     codec: Codec = .automatic, logicalSize: LogicalSize = .native,
     zoom: Zoom = .commandKeys,
     auxiliaryAction: AuxiliaryAction = .disabled,
     avcBitrate: UInt32 = 40_000_000,
-    hevcBitrate: UInt32 = 25_000_000, graceSeconds: Int = 15
+    hevcBitrate: UInt32 = 25_000_000, graceSeconds: Int = 15, adaptiveBitrate: Bool = true
   ) {
+    self.adaptiveBitrate = adaptiveBitrate
     self.codec = codec
     self.logicalSize = logicalSize
     self.zoom = zoom

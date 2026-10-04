@@ -27,7 +27,7 @@ from aggregate_timing import (
     parse,
     validate_timing_line,
 )
-from collect_timing import collect, host_snapshot
+from collect_timing import Observation, _zero_runs, collect, host_snapshot
 
 CONFIG = load_config()
 
@@ -321,6 +321,108 @@ class ProductionTimingIntegrationTest(unittest.TestCase):
                 )
             writer.result(timeout=6)
             self.assertEqual(result, 0)
+
+    def test_diagnostic_retains_freeze_but_default_still_refuses_three_zeros(
+        self,
+    ) -> None:
+        self.copy()
+        lines = self.host.read_bytes().splitlines()
+        frozen = [line.replace(b"complete=60", b"complete=0", 1) for line in lines[:3]]
+        strict = Observation(CONFIG, time.monotonic(), None)
+        diagnostic = Observation(CONFIG, time.monotonic(), None, diagnostic=True)
+        with self.assertRaisesRegex(IncompleteCalibration, "host capture stalled"):
+            for line in frozen:
+                strict.accept_host(line, io.BytesIO(), io.BytesIO())
+        retained = io.BytesIO()
+        for line in frozen:
+            diagnostic.accept_host(line, retained, io.BytesIO())
+        self.assertEqual(retained.getvalue().count(b"\n"), 3)
+        self.assertTrue(
+            any("host complete zero" in fact for fact in diagnostic.gap_facts)
+        )
+        self.assertIn(0, diagnostic.host_breaks)
+        runs = _zero_runs(
+            [
+                validate_timing_line(line.decode("ascii"), "host")
+                for line in (*frozen, lines[3])
+            ],
+            "complete",
+        )
+        self.assertEqual(runs["count"], 1)
+        window = cast(list[dict[str, object]], runs["windows"])[0]
+        self.assertEqual(window["intervals"], 3)
+        self.assertEqual(window["recovered"], True)
+
+    def test_latency_collector_waits_for_separate_final_and_ignores_old_replay(
+        self,
+    ) -> None:
+        self.copy()
+        host_v4 = self.host.read_bytes()
+        host_trace = [
+            line.replace(b" epoch=9 ", b" epoch=7 ")
+            for line in (self.emitted / "host-latency.log")
+            .read_bytes()
+            .splitlines(keepends=True)
+        ]
+        client_trace = [
+            line.replace(b" epoch=9 ", b" epoch=7 ").replace(
+                b" startNs=1500000000 ", b" startNs=1000000000 "
+            )
+            for line in (self.emitted / "client-latency.log")
+            .read_bytes()
+            .splitlines(keepends=True)
+        ]
+        client_with_trace = Path(self.directory.name) / "client-with-trace.log"
+        client_with_trace.write_bytes(self.client.read_bytes() + b"".join(client_trace))
+        self.host.write_bytes(b"")
+        output = Path(self.directory.name) / "out-final-separation"
+        # A valid-looking prior trace line must not become the selected identity.
+        replay = client_trace[0].replace(b" epoch=7 ", b" epoch=8 ")
+        fake_adb = self.fake_adb(client_with_trace, output, old=replay)
+        ready = threading.Event()
+
+        def emit_host() -> None:
+            if not ready.wait(5):
+                raise AssertionError("collector did not seed host offsets")
+            self.host.write_bytes(host_v4 + host_trace[0])
+            self.wait_nonempty(output / "client-timing.log")
+            time.sleep(0.3)  # v4 finals already arrived; trace final is later.
+            with self.host.open("ab") as target:
+                target.write(host_trace[-1])
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            writer = executor.submit(emit_host)
+            with (
+                patch(
+                    "collect_timing.load_config",
+                    return_value={
+                        **CONFIG,
+                        "allowedActiveSeconds": [1],
+                        "startupSeconds": 1,
+                    },
+                ),
+                redirect_stdout(io.StringIO()) as captured,
+            ):
+                result = collect(
+                    self.host,
+                    output,
+                    1,
+                    str(fake_adb),
+                    on_ready=ready.set,
+                    latency=True,
+                    expected_route="usb",
+                )
+            writer.result(timeout=6)
+        self.assertEqual(result, 2)  # Two-second trace does not match 90-second v4.
+        self.assertEqual(
+            (output / "host-latency.log").read_bytes(),
+            b"".join(host_trace),
+            captured.getvalue(),
+        )
+        self.assertEqual(
+            (output / "client-latency.log").read_bytes(), b"".join(client_trace)
+        )
+        self.assertIn('"completeWindow": false', captured.getvalue())
 
     def test_collector_reconciles_rotation_between_opening_oldest_and_previous(
         self,

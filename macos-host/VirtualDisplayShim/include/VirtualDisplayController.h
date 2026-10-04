@@ -9,6 +9,7 @@ NS_ASSUME_NONNULL_BEGIN
            logicalWidth:(uint32_t)width
           logicalHeight:(uint32_t)height
                   hiDPI:(BOOL)hiDPI
+            refreshRate:(double)refreshRate
                   error:(NSError **)error;
 - (void)destroy;
 @end

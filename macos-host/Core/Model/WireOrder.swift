@@ -36,15 +36,31 @@ public struct WireOrder: Sendable {
     .clientHello, .clientReady, .inputBatch, .scroll, .zoom, .contextClick, .shortcut,
     .auxiliaryKey, .pong, .clientMetrics, .protocolError, .decoderFailure,
     .requestKeyframe, .sessionRejected, .stopAcknowledged,
+    .rtcCapabilities, .rtcPrepared, .rtcAnswer, .rtcIceCandidate,
+    .rtcIceEnd, .rtcMediaReady,
   ]
   private static let hostControl: Set<MessageKind> = [
     .sessionConfig, .startStream, .stopSession, .ping, .protocolError,
+    .rtcPrepare, .rtcOffer, .rtcIceCandidate, .rtcIceEnd, .rtcStart,
   ]
   /// Only call for an ignorable future-minor type already validated by WireFramer.
   public mutating func skipUnknown(sequence: UInt64) throws {
     guard nextSequence > 0, sequence == nextSequence, nextSequence != UInt64.max else {
       throw WireFailure.malformed
     }
+    nextSequence += 1
+  }
+  /// Authenticated RTC retries discard old-epoch RTC records only after their
+  /// framing and sequence have been accounted for; never apply their SDP/ICE.
+  public mutating func skipStaleRtc(_ message: WireMessage) throws {
+    guard channel == .control, peer == .client, nextSequence > 0,
+      [.rtcCapabilities, .rtcPrepared, .rtcAnswer, .rtcIceCandidate,
+        .rtcIceEnd, .rtcMediaReady].contains(MessageKind(rawValue: message.type)),
+      message.sequence == nextSequence,
+      nextSequence != UInt64.max, message.fields.count >= 2,
+      case .bytes(let id) = message.fields[0], id == sessionId,
+      case .integer(let received) = message.fields[1], received < epoch
+    else { throw WireFailure.malformed }
     nextSequence += 1
   }
   private func envelope(_ type: MessageKind, fields: [WireValue]) throws -> (UInt64, Data?) {

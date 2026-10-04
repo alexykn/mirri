@@ -390,6 +390,8 @@ def aggregate(
         "schema": version,
         "intervals": len(records),
         "activeSeconds": active,
+        "startNs": records[0].numbers["startNs"],
+        "endNs": records[-1].numbers["endNs"],
         "epoch": records[0].numbers["epoch"],
         "stages": combined,
         "completeWindow": True,
@@ -659,6 +661,31 @@ def _render_status(
     return "incomplete"
 
 
+def _optional_latency(
+    host_path: Path | None,
+    client_path: Path | None,
+    expected_route: str | None,
+    epoch: int,
+    host_start: int,
+    host_end: int,
+    client_start: int,
+    client_end: int,
+) -> dict[str, object] | None:
+    if (host_path is None) != (client_path is None):
+        raise IncompleteCalibration("both latency record files required")
+    if host_path is None or client_path is None:
+        return None
+    if expected_route is None:
+        raise IncompleteCalibration("expected route required for latency baseline")
+    from latency_trace import aggregate_paths, require_matching_window
+
+    latency = aggregate_paths(host_path, client_path)
+    if latency["epoch"] != epoch or latency["route"] != expected_route:
+        raise IncompleteCalibration("latency epoch or requested route mismatch")
+    require_matching_window(latency, host_start, host_end, client_start, client_end)
+    return latency
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -668,6 +695,17 @@ def main() -> int:
         "--client", required=True, type=Path, help="filtered numeric-only logcat"
     )
     parser.add_argument("--active-seconds", type=int, required=True)
+    parser.add_argument(
+        "--host-latency", type=Path, help="optional numeric host latency records"
+    )
+    parser.add_argument(
+        "--client-latency", type=Path, help="optional numeric client latency records"
+    )
+    parser.add_argument(
+        "--expected-route",
+        choices=("usb", "network"),
+        help="require independently logged transport route",
+    )
     args = parser.parse_args()
     try:
         config = load_config()
@@ -686,6 +724,16 @@ def main() -> int:
         ]
         if results[0]["epoch"] != results[1]["epoch"]:
             raise IncompleteCalibration("host/client epoch mismatch")
+        latency = _optional_latency(
+            args.host_latency,
+            args.client_latency,
+            args.expected_route,
+            cast(int, results[0]["epoch"]),
+            cast(int, results[0]["startNs"]),
+            cast(int, results[0]["endNs"]),
+            cast(int, results[1]["startNs"]),
+            cast(int, results[1]["endNs"]),
+        )
     except (IncompleteCalibration, OSError, UnicodeError) as error:
         print(f"incomplete calibration: {error.__class__.__name__}: {error}")
         return 2
@@ -695,6 +743,7 @@ def main() -> int:
                 "sourceOnlyAnalysis": True,
                 "acceptance": "not-assessed",
                 "records": results,
+                **({"latency": latency} if latency is not None else {}),
             },
             sort_keys=True,
         )

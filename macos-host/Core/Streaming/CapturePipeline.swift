@@ -143,8 +143,30 @@ public final class VideoSender: @unchecked Sendable {
   }
 }
 
+/// At most 60 forwarded frames per second of media time, with room for one
+/// catch-up frame. A display faster than the stream then loses no 60 fps update
+/// that slipped by a refresh, while 120 fps content is halved evenly.
+public struct CaptureRateLimiter: Sendable {
+  // Steady 60 fps content settles half a token under the cap, so the surplus
+  // from a late frame is kept for the early one that follows it.
+  private var tokens = 3.0
+  private var last: CMTime?
+  public init() {}
+  public mutating func admit(_ pts: CMTime) -> Bool {
+    if let last {
+      let elapsed = CMTimeGetSeconds(CMTimeSubtract(pts, last))
+      if elapsed.isFinite, elapsed > 0 { tokens = min(3, tokens + elapsed * 60) }
+    }
+    last = pts
+    guard tokens >= 1 else { return false }
+    tokens -= 1
+    return true
+  }
+}
+
 public final class ScreenCapturer: NSObject, SCStreamOutput, @unchecked Sendable {
   private var stream: SCStream?
+  private var limiter = CaptureRateLimiter()
   private let encoder: VideoEncoder
   private let gate: VideoAdmission
   /// SCStream delivers callbacks on the single sampleHandlerQueue configured below.
@@ -175,7 +197,10 @@ public final class ScreenCapturer: NSObject, SCStreamOutput, @unchecked Sendable
     // 56.64 fps, while .zero measured 59.92 fps in matched 90 s motion.
     // Do not treat this short run as the still-pending 30-minute acceptance.
     configuration.minimumFrameInterval = .zero
-    configuration.queueDepth = 2
+    // This is the surface pool, not a latency queue. The encoder holds each
+    // surface for its whole encode and four credits may be in flight; a pool of
+    // two starved capture (57.9 fps at ~13 ms encode, ~43 fps at ~42 ms).
+    configuration.queueDepth = 6
     configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
     configuration.colorSpaceName = CGColorSpace.sRGB
     configuration.showsCursor = true
@@ -222,6 +247,10 @@ public final class ScreenCapturer: NSObject, SCStreamOutput, @unchecked Sendable
       return
     }
     let pts = CMSampleBufferGetPresentationTimeStamp(buffer)
+    guard limiter.admit(pts) else {
+      onRejected?(.overRate)
+      return
+    }
     var gap: Double?
     if let previous = lastCompletePTS {
       let milliseconds = CMTimeGetSeconds(CMTimeSubtract(pts, previous)) * 1_000
@@ -259,7 +288,7 @@ public final class ScreenCapturer: NSObject, SCStreamOutput, @unchecked Sendable
 
 public enum CaptureRejection: Sendable {
   case nonComplete, idle, blank, suspended, started, stopped
-  case formatMismatch, creditFull, encodeSubmitFailure
+  case formatMismatch, creditFull, encodeSubmitFailure, overRate
 }
 
 public enum PendingVTEvent: Sendable {
@@ -279,6 +308,7 @@ public final class CapturePipeline: @unchecked Sendable {
   private let gate = VideoAdmission()
   public init(
     settings: EncodingSettings, sink: any EncodedVideoSink, timing: HostVideoTiming,
+    latencyTrace: HostLatencyTrace? = nil,
     onFailure: @escaping @Sendable (PipelineFailureCause) -> Void,
     onReceived: @escaping @Sendable () -> Void,
     onCompleteCadence: @escaping @Sendable (Double?) -> Void,
@@ -306,8 +336,9 @@ public final class CapturePipeline: @unchecked Sendable {
     sender.onRelease = { [encoder] in encoder.recycle($0) }
     encoder.onFailure = { failure.report { onFailure(.encoder) } }
     sender.onSent = onSent
-    sender.onTimelineSent = { [timing] unit, sequence, atNs in
+    sender.onTimelineSent = { [timing, latencyTrace] unit, sequence, atNs in
       timing.written(unit, sequence: sequence, atNs: atNs)
+      latencyTrace?.written(sequence: sequence, atNs: atNs)
     }
     sender.onQueuedDepth = { [timing] depth in timing.encodedQueue(depth: depth) }
     capturer.onReceived = onReceived
