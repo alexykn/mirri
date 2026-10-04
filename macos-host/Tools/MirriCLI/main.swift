@@ -34,6 +34,7 @@ let usage = """
     watch [--interval seconds]  Print state and metrics until interrupted
     logs                        Print the host log folder
     show [settings]             Open the menu-bar panel, optionally on its Settings page
+    hide                        Close the menu-bar panel
     launch                      Start the host app if it is not running
     quit                        Stop any session and quit the host app
 
@@ -318,6 +319,9 @@ case "show":
   emit(
     checked(send(["command": "show", "settings": positionals.first == "settings"])),
     { "Panel opened" })
+case "hide":
+  allow()
+  emit(checked(send(["command": "hide"])), { "Panel closed" })
 case "quit":
   allow()
   guard isRunning() else {

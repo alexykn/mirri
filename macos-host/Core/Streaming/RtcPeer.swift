@@ -109,10 +109,11 @@ final class RtcPeer: NSObject, LKRTCPeerConnectionDelegate, SCStreamOutput, @unc
   }
   /// `ceiling` is the configured AVC bitrate. Adaptive: congestion control moves
   /// between the floor and the ceiling. Fixed: floor, start and ceiling coincide.
-  /// The floor is where the low-latency encoder still lowers quality: at an
-  /// estimate near 3 Mbit/s it dropped a third to half of 2456x1600 frames.
+  /// The floor is where the low-latency encoder still lowers quality instead of
+  /// dropping frames: full-screen motion at 2456x1600 lost a third to half of
+  /// its frames near 3 Mbit/s and still some at 6, but none from about 7.6.
   func prepare(ceiling: UInt32, adaptive: Bool) throws {
-    let floor = adaptive ? min(6_000_000, ceiling) : ceiling
+    let floor = adaptive ? min(10_000_000, ceiling) : ceiling
     let configuration = LKRTCConfiguration()
     configuration.iceServers = []
     configuration.tcpCandidatePolicy = .disabled
@@ -143,7 +144,7 @@ final class RtcPeer: NSObject, LKRTCPeerConnectionDelegate, SCStreamOutput, @unc
     // nearly every 2456x1600 frame until the estimate ramps. This is a LAN start
     // hint only; congestion control still lowers or raises it within the bounds.
     guard peer.setBweMinBitrateBps(NSNumber(value: floor),
-      currentBitrateBps: NSNumber(value: adaptive ? min(8_000_000, ceiling) : ceiling),
+      currentBitrateBps: NSNumber(value: adaptive ? min(12_000_000, ceiling) : ceiling),
       maxBitrateBps: NSNumber(value: ceiling)) else {
       peer.close()
       throw HostFailure.hardwareCodec

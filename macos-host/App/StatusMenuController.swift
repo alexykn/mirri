@@ -11,6 +11,11 @@ import MirriHostCore
     super.init()
     popover.behavior = .transient  // Outside click and Escape dismiss the panel.
     popover.animates = true
+    // Sit flush under the menu bar like the system's own menus, without the
+    // callout arrow. Not public API; if it is ever refused the arrow returns.
+    if popover.responds(to: NSSelectorFromString("setShouldHideAnchor:")) {
+      popover.setValue(true, forKey: "shouldHideAnchor")
+    }
     popover.contentViewController = makeConnectionPanel(panel)
     if let button = item.button {
       button.title = "▣ Mirri"
@@ -55,6 +60,8 @@ import MirriHostCore
     popover.contentViewController?.view.window?.makeFirstResponder(nil)
     return popover.isShown
   }
+
+  func hide() { popover.performClose(nil) }
 
   @objc private func toggle() {
     if popover.isShown { popover.performClose(nil) } else if !show() { showWhenReady() }

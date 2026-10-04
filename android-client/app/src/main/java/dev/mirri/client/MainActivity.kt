@@ -45,6 +45,14 @@ class MainActivity : ComponentActivity() {
     private val waitReason = MutableStateFlow<Int?>(null)
     private var sessionSeen = false
 
+    /** Held only while streaming: keeps the Wi-Fi radio out of power save, whose wake-ups arrive as delay spikes. */
+    private val wifiLock by lazy {
+        applicationContext
+            .getSystemService(android.net.wifi.WifiManager::class.java)
+            .createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "mirri:stream")
+            .apply { setReferenceCounted(false) }
+    }
+
     @Suppress("CyclomaticComplexMethod")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -69,6 +77,7 @@ class MainActivity : ComponentActivity() {
                     status.text = getString(R.string.session_status, snapshot.state, snapshot.note)
                     status.visibility =
                         if (snapshot.state == ClientSessionState.STREAMING) View.GONE else View.VISIBLE
+                    holdWifi(snapshot.state == ClientSessionState.STREAMING)
                     // A finished session hands the tablet back to its paired host:
                     // a failure asks to resume, a host Stop only waits.
                     when (snapshot.state) {
@@ -258,6 +267,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Some vendors refuse the lock even with WAKE_LOCK granted; streaming works without it. */
+    private fun holdWifi(streaming: Boolean) {
+        try {
+            if (streaming) {
+                wifiLock.acquire()
+            } else if (wifiLock.isHeld) {
+                wifiLock.release()
+            }
+        } catch (e: SecurityException) {
+            Log.i("MirriLifecycle", "low-latency Wi-Fi lock unavailable")
+        }
+    }
+
     override fun onStart() {
         super.onStart()
         // Coming back to the app is a person asking for the display again.
@@ -286,6 +308,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         Log.i("MirriLifecycle", "activity destroyed")
         input.reset()
+        holdWifi(false)
         controller.stop()
         super.onDestroy()
     }

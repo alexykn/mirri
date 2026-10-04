@@ -479,6 +479,9 @@ extension AppDelegate {
       menu.panel.showSettings = request["settings"] as? Bool == true
       menu.showWhenReady()
       return reply(status())
+    case "hide":
+      menu.hide()
+      return reply(status())
     case "connect":
       guard selection.isEditable else { return failure("Mirri is busy; disconnect first") }
       await refreshDevices()
