@@ -71,7 +71,47 @@ public struct NetworkIdentity: @unchecked Sendable {
       }, issuerPrivateKey: .init(key))
     var serializer = DER.Serializer()
     try serializer.serialize(cert)
-    let der = Data(serializer.serializedBytes)
+    return try assemble(
+      key: key, der: Data(serializer.serializedBytes),
+      expiresAt: now.addingTimeInterval(24 * 60 * 60))
+  }
+
+  /// A long-lived identity for the paired-tablet rendezvous listener. The tablet
+  /// pins this exact leaf, so it carries no address and outlives any one network.
+  public static func createPersistent(now: Date = Date()) throws -> (key: Data, identity: Self) {
+    let key = P256.Signing.PrivateKey()
+    let name = try DistinguishedName { CommonName("Mirri host") }
+    let expiresAt = now.addingTimeInterval(20 * 365 * 24 * 60 * 60)
+    let cert = try Certificate(
+      version: .v3,
+      serialNumber: .init(bytes: Array((0..<16).map { _ in UInt8.random(in: 0...255) })),
+      publicKey: .init(key.publicKey),
+      notValidBefore: now.addingTimeInterval(-300), notValidAfter: expiresAt,
+      issuer: name, subject: name, signatureAlgorithm: .ecdsaWithSHA256,
+      extensions: try Certificate.Extensions {
+        Critical(BasicConstraints.notCertificateAuthority)
+        Critical(KeyUsage(digitalSignature: true))
+      }, issuerPrivateKey: .init(key))
+    var serializer = DER.Serializer()
+    try serializer.serialize(cert)
+    return (
+      Data(key.rawRepresentation),
+      try assemble(key: key, der: Data(serializer.serializedBytes), expiresAt: expiresAt)
+    )
+  }
+
+  /// Rebuild a stored identity; a key that does not match the certificate fails.
+  public static func restore(key raw: Data, certificateDER der: Data) throws -> Self {
+    guard let key = try? P256.Signing.PrivateKey(rawRepresentation: raw),
+      let cert = try? Certificate(derEncoded: Array(der)),
+      cert.publicKey == Certificate.PublicKey(key.publicKey)
+    else { throw HostFailure.unauthorized }
+    return try assemble(key: key, der: der, expiresAt: cert.notValidAfter)
+  }
+
+  private static func assemble(key: P256.Signing.PrivateKey, der: Data, expiresAt: Date) throws
+    -> Self
+  {
     guard let secCertificate = SecCertificateCreateWithData(nil, der as CFData) else {
       throw HostFailure.transport
     }
@@ -90,7 +130,7 @@ public struct NetworkIdentity: @unchecked Sendable {
     else { throw HostFailure.transport }
     return Self(
       pin: Data(SHA256.hash(data: der)), certificateDER: der,
-      expiresAt: now.addingTimeInterval(24 * 60 * 60), identity: nwIdentity)
+      expiresAt: expiresAt, identity: nwIdentity)
   }
   private init(pin: Data, certificateDER: Data, expiresAt: Date, identity: sec_identity_t) {
     self.pin = pin

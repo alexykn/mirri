@@ -72,8 +72,8 @@ public struct ConnectionSelection: Sendable {
   public var readinessHelp: String? {
     guard isEditable else { return nil }
     if discoveryFailed { return "Can't check USB devices. Check ADB, the cable and USB debugging." }
-    if !hasCheckedDevices { return "Connect a USB cable and unlock the tablet." }
-    if devices.isEmpty { return "Attach and authorize a USB tablet to begin." }
+    if !hasCheckedDevices { return "Connect a USB cable, or open Mirri on a paired tablet." }
+    if devices.isEmpty { return "Attach a USB tablet, or open Mirri on a paired tablet." }
     if selectedDevice == nil { return "Choose the tablet you want to use." }
     if addresses.isEmpty {
       return "No active Mac IPv4 address. Connect both devices to a LAN or hotspot."

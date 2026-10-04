@@ -162,6 +162,16 @@ production implementation in a test harness.
 
 ## Implementation status
 
+* **2026-10-04 recovery and cable-free use (verified on the TXZ-W09):** a
+  WebRTC session that loses its path or control link renegotiates on the next
+  epoch with the display kept (about 6 s after a 4 s Wi-Fi dropout). Every
+  cable launch pairs the tablet; a paired tablet finds the host over Bonjour
+  and pinned TLS and is handed its session without ADB (4 s from opening the
+  app to streaming). An outage longer than the grace period ends the session
+  and the paired tablet asks for a new one (streaming again 22 s after Wi-Fi
+  returned). See `protocol/pairing.md`. `NetworkConnectionRoute` now takes a
+  `ClientLauncher` (ADB or rendezvous) instead of owning ADB itself.
+
 * **2026-10-04 smoothness changes (measured on the TXZ-W09 over Wi-Fi, 90 s
   owned-display motion, SurfaceFlinger present times as ground truth):**
   the virtual display runs at 120 Hz with a 60 fps capture rate limiter;

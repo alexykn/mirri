@@ -73,7 +73,7 @@ private struct ConnectionPanel: View {
           deviceChoice
           networkChoice
           Text(
-            "Share a Wi-Fi LAN or tablet hotspot. USB is needed to start; after Connected you may unplug it. Not Wi-Fi Direct."
+            "Share a Wi-Fi LAN or tablet hotspot. Connect once with USB to pair; after that, opening Mirri on the tablet is enough. Not Wi-Fi Direct."
           )
           .font(.caption)
           .foregroundStyle(.secondary)
@@ -156,9 +156,9 @@ private struct ConnectionPanel: View {
             model.onDevice?(device)
           } label: {
             if selection.selectedDevice == device {
-              Label("\(device.model) · USB \(index + 1)", systemImage: "checkmark")
+              Label(label(device, index), systemImage: "checkmark")
             } else {
-              Text("\(device.model) · USB \(index + 1)")
+              Text(label(device, index))
             }
           }
         }
@@ -173,8 +173,13 @@ private struct ConnectionPanel: View {
   private var selectedTabletLabel: String {
     guard let selectedDevice = selection.selectedDevice,
       let index = selection.devices.firstIndex(of: selectedDevice)
-    else { return selection.selectedDevice?.model ?? "Choose a USB tablet" }
-    return "\(selectedDevice.model) · USB \(index + 1)"
+    else { return selection.selectedDevice?.model ?? "Choose a tablet" }
+    return label(selectedDevice, index)
+  }
+
+  private func label(_ device: ADBDevice, _ index: Int) -> String {
+    device.serial.hasPrefix("paired:")
+      ? "\(device.model) · Wi-Fi (paired)" : "\(device.model) · USB \(index + 1)"
   }
 
   private var networkChoice: some View {

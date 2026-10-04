@@ -1,4 +1,5 @@
 <resources>
     <string name="session_status">Mirri: %1$s\n%2$s</string>
-    <string name="launch_from_host">Mirri: launch from the Mac host (USB setup)</string>
+    <string name="launch_from_host">Mirri: connect once from the Mac with the USB cable to pair</string>
+    <string name="waiting_for_paired_host">Mirri: looking for the paired Mac on this network</string>
 </resources>

@@ -16,6 +16,9 @@ interface ByteConnection : AutoCloseable {
     /** Clear connection-establishment read deadlines once the authenticated setup completes. */
     fun finishSetup() = Unit
 
+    /** Bound a blocking read where silence means the peer is gone; 0 waits forever. */
+    fun setReadTimeout(milliseconds: Int) = Unit
+
     override fun close()
 }
 

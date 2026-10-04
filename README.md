@@ -358,13 +358,21 @@ mirri reconnect
 mirri set --codec avc --avc-bitrate 20 --size retina
 mirri set --adaptive-bitrate off  # WebRTC: pin the bitrate to --avc-bitrate
 mirri install path/to/app-debug.apk
+mirri paired                      # tablets that can connect without the cable
+mirri unpair                      # forget them
+mirri set --auto-connect off      # do not start when a paired tablet opens Mirri
 mirri watch                       # one state/metrics line per second
 mirri logs | launch | show | quit
 ```
 
+Connecting once with the USB cable pairs the tablet. After that no cable is
+needed: open Mirri on the tablet and the Mac starts streaming, and a session
+lost to a network outage comes back by itself. See
+[`protocol/pairing.md`](protocol/pairing.md) for the protocol and its limits.
+
 `connect` launches the app if needed (`MIRRI_HOST_APP` overrides
-`~/Applications/Mirri Development.app`) and needs one authorized USB debugging
-device for setup. `--address` and `--device` may be omitted only when there is
+`~/Applications/Mirri Development.app`). It needs either one authorized USB
+debugging device or a paired tablet with Mirri open. `--address` and `--device` may be omitted only when there is
 exactly one choice. Failures and timeouts exit nonzero; usage errors exit 2.
 
 ## Privacy and permissions

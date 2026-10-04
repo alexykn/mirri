@@ -413,7 +413,7 @@ public actor SessionCoordinator {
       auxiliaryAction: preferences.auxiliaryAction)
     reconnectUntil = nil
     snapshot.video = "RTC H.264 High 5.2 hardware-required, selected UDP (capture started)"
-    await state(.streaming, "RTC video over UDP (USB credential, pinned TLS control)")
+    await state(.streaming, "RTC video over UDP (pinned TLS control)")
     tick?.cancel()
     tick = Task { [weak self] in
       while !Task.isCancelled {

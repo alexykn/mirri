@@ -20,11 +20,17 @@ public struct NetworkLaunch: Sendable {
   public let pin: Data
   public let media: Media
   public let sessionId: Data?
-  public init(address: String, pin: Data, media: Media = .comparison, sessionId: Data? = nil) {
+  /// Delivered only over the cable: lets the tablet find this host again without it.
+  public let pairing: PairingGrant?
+  public init(
+    address: String, pin: Data, media: Media = .comparison, sessionId: Data? = nil,
+    pairing: PairingGrant? = nil
+  ) {
     self.address = address
     self.pin = pin
     self.media = media
     self.sessionId = sessionId
+    self.pairing = pairing
   }
 }
 
@@ -160,14 +166,22 @@ public actor ADBClient {
     if network.media == .rtc, network.sessionId?.count != 16 {
       throw HostFailure.unauthorized
     }
-    let hex = token.map { String(format: "%02x", $0) }.joined()
+    func text(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
+    let pairingExtras: [String] =
+      network.pairing.map {
+        [
+          "--es", "mirri_pair_id", text($0.id), "--es", "mirri_pair_key", text($0.key),
+          "--es", "mirri_pair_pin", text($0.pin),
+        ]
+      } ?? []
+    let hex = text(token)
     let networkExtras: [String] =
       [
         "--es", "mirri_host", network.address,
         "--es", "mirri_pin", network.pin.map { String(format: "%02x", $0) }.joined(),
       ] + (network.media == .rtc ? [
         "--es", "mirri_media", "rtc", "--es", "mirri_session_id",
-        network.sessionId!.map { String(format: "%02x", $0) }.joined(),
+        text(network.sessionId ?? Data()),
       ] : [])
     _ = try await on(
       device,
@@ -183,7 +197,7 @@ public actor ADBClient {
         "--ei", "mirri_video_port", "5560",
         "--ei", "mirri_protocol_major", "1",
         "--ei", "mirri_epoch", String(epoch), "--es", "mirri_mode", "network",
-      ] + networkExtras)
+      ] + networkExtras + pairingExtras)
   }
   public func forceStopClient(device: ADBDevice) async {
     _ = try? await on(device, ["shell", "am", "force-stop", Self.package])

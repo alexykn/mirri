@@ -99,6 +99,10 @@ class SessionController(
     private var job: Job? = null
     private var terminalLaunch = false
 
+    /** With a paired host the tablet can ask for a new session, so it stops retrying a dead one sooner. */
+    var pairedHost = false
+    private var refused = false
+
     @Volatile
     private var attempt: ClientAttempt? = null
     private val dropped = AtomicLong()
@@ -216,11 +220,13 @@ class SessionController(
 
     private suspend fun run() {
         var retryCount = 0
+        var refusals = 0
         var terminal = false
         while (scope.isActive && hasActiveSession() && !terminal) {
             val spec = requireNotNull(launch)
             val owner = ClientAttempt()
             attempt = owner
+            refused = false
             when (runAttempt(spec, owner)) {
                 AttemptResult.CONNECTED -> retryCount = 0
                 AttemptResult.RETRY -> Unit
@@ -230,10 +236,19 @@ class SessionController(
                 }
             }
             if (!terminal && hasActiveSession()) {
+                // A reachable host that twice refuses the control port has ended this session.
+                refusals = if (refused) refusals + 1 else 0
+                if (pairedHost && refusals >= 2) {
+                    state(ClientSessionState.FAILED, "Host ended the session")
+                    terminal = true
+                    terminalLaunch = true
+                    continue
+                }
                 delay(ReconnectPolicy.delayMs(retryCount++))
-                if (retryCount > 16) {
+                if (retryCount > if (pairedHost) 8 else 16) {
                     state(ClientSessionState.FAILED, "Reconnect window expired")
                     terminal = true
+                    terminalLaunch = true
                 }
             }
         }
@@ -259,6 +274,7 @@ class SessionController(
             throw e
         } catch (e: Exception) {
             if (spec.media == NetworkMedia.RTC) Log.i("MirriLifecycle", "RTC attempt exception class=${e.javaClass.simpleName}")
+            refused = e is java.net.ConnectException && e.message?.contains("ECONNREFUSED") == true
             // An RTC stream that was running and then lost its path or control
             // connection is retried on the host's next epoch, like a closed socket.
             val interrupted = spec.media == NetworkMedia.RTC && owner.reachedStreaming && e is WireException

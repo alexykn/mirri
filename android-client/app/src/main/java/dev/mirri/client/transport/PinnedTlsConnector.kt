@@ -101,6 +101,10 @@ private class TlsByteConnection(
         tls?.soTimeout = 0
     }
 
+    override fun setReadTimeout(milliseconds: Int) {
+        tls?.soTimeout = milliseconds
+    }
+
     override fun close() {
         closed = true
         runCatching { socket.close() }

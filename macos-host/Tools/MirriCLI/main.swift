@@ -23,11 +23,14 @@ let usage = """
         --size native|retina
         --avc-bitrate 20...80     Mbit/s (the ceiling for WebRTC video)
         --adaptive-bitrate on|off WebRTC only: adapt below the ceiling (default on)
+        --auto-connect on|off     Start when a paired tablet opens Mirri (default on)
         --hevc-bitrate 25...80    Mbit/s
         --grace 1...60            Reconnect grace in seconds
         --zoom commandKeys|disabled
         --pencil missionControl|contextClick|disabled
     install <apk> [--device n]  Install or upgrade the tablet client
+    paired                      List tablets paired for cable-free use
+    unpair                      Forget every paired tablet
     watch [--interval seconds]  Print state and metrics until interrupted
     logs                        Print the host log folder
     show                        Open the menu-bar panel
@@ -257,7 +260,9 @@ case "reconnect":
   let status = checked(send(["command": "reconnect"]))
   emit(status) { summary(status) }
 case "set":
-  allow("codec", "size", "avc-bitrate", "hevc-bitrate", "grace", "zoom", "pencil", "adaptive-bitrate")
+  allow(
+    "codec", "size", "avc-bitrate", "hevc-bitrate", "grace", "zoom", "pencil", "adaptive-bitrate",
+    "auto-connect")
   var request: [String: Any] = ["command": "set"]
   for name in ["codec", "size", "zoom", "pencil"] where options[name] != nil {
     request[name] = options[name]
@@ -265,9 +270,10 @@ case "set":
   for (name, key) in [("avc-bitrate", "avcBitrate"), ("hevc-bitrate", "hevcBitrate"), ("grace", "grace")] {
     if let value = number(name) { request[key] = value }
   }
-  if let adaptive = options["adaptive-bitrate"] {
-    guard adaptive == "on" || adaptive == "off" else { fail("--adaptive-bitrate needs on or off", code: 2) }
-    request["adaptiveBitrate"] = adaptive == "on"
+  for (name, key) in [("adaptive-bitrate", "adaptiveBitrate"), ("auto-connect", "autoConnect")] {
+    guard let value = options[name] else { continue }
+    guard value == "on" || value == "off" else { fail("--\(name) needs on or off", code: 2) }
+    request[key] = value == "on"
   }
   let status = checked(send(request))
   emit(status) {
@@ -284,6 +290,13 @@ case "install":
   ]
   if let device = options["device"] { request["device"] = Int(device) ?? device }
   emit(checked(send(request)), { "Installed" })
+case "paired", "unpair":
+  allow()
+  let reply = checked(send(["command": command]))
+  emit(reply) {
+    let labels = reply["paired"] as? [String] ?? []
+    return labels.isEmpty ? "No paired tablets" : labels.joined(separator: "\n")
+  }
 case "watch":
   allow("interval")
   let interval = max(1, number("interval") ?? 1)

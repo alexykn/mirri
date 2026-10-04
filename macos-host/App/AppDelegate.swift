@@ -6,7 +6,13 @@ import UniformTypeIdentifiers
   private let menu = StatusMenuController()
   private let permissions = PermissionsController()
   private let settings = HostSettings()
-  private let devices = USBDeviceService()
+  private let pairing = PairingStore()
+  private lazy var devices = USBDeviceService(pairing: pairing)
+  private var rendezvous: RendezvousListener?
+  /// Paired tablets currently waiting on the LAN, by pairing ID.
+  private var presences: [Data: RendezvousPresence] = [:]
+  private var usbDevices: Result<[ADBDevice], Error> = .success([])
+  private var automaticStarts: [Date] = []
   private var coordinator: SessionCoordinator!
   private var poll: Task<Void, Never>?
   private var pendingStart: Task<Void, Never>?
@@ -20,6 +26,14 @@ import UniformTypeIdentifiers
         guard let self else { return }
         selection.update(snapshot)
         render()
+        // A tablet that gave up on a broken session may already be waiting.
+        if snapshot.state == .failed {
+          Task { @MainActor in
+            if let waiting = self.presences.values.first(where: { $0.reason != .idle }) {
+              self.startAutomatically(with: waiting)
+            }
+          }
+        }
       })
     configureConnectionActions()
     configureSettingsActions()
@@ -39,6 +53,7 @@ import UniformTypeIdentifiers
     if ProcessInfo.processInfo.arguments.contains("--show-connection") {
       menu.showWhenReady()
     }
+    startRendezvous()
     let server = ControlServer { [weak self] request in
       await self?.control(request) ?? Data(#"{"ok":false,"error":"Mirri is quitting"}"#.utf8)
     }
@@ -122,9 +137,73 @@ import UniformTypeIdentifiers
     guard selection.isEditable else { return }
     let result: Result<[ADBDevice], Error>
     do { result = .success(try await devices.discover()) } catch { result = .failure(error) }
+    usbDevices = result
+    publishDevices()
+  }
+  /// Cable devices plus paired tablets waiting on the network. ADB being
+  /// unavailable only matters when no paired tablet is present either.
+  private func publishDevices() {
     guard selection.isEditable else { return }
-    selection.discovered(result)
+    let waiting = presences.values
+      .sorted { $0.tablet.label < $1.tablet.label }
+      .map { ADBDevice(serial: Self.pairedPrefix + $0.tablet.id.base64EncodedString(), model: $0.tablet.label) }
+    switch usbDevices {
+    case .success(let usb): selection.discovered(.success(usb + waiting))
+    case .failure(let error):
+      selection.discovered(waiting.isEmpty ? .failure(error) : .success(waiting))
+    }
     render()
+  }
+  private static let pairedPrefix = "paired:"
+  private func presence(for device: ADBDevice) -> RendezvousPresence? {
+    guard device.serial.hasPrefix(Self.pairedPrefix),
+      let id = Data(base64Encoded: String(device.serial.dropFirst(Self.pairedPrefix.count)))
+    else { return nil }
+    return presences[id]
+  }
+  private func startRendezvous() {
+    Task { [weak self] in
+      guard let self else { return }
+      do {
+        let identity = try await pairing.identity()
+        let pairing = self.pairing
+        let listener = try RendezvousListener(
+          identity: identity,
+          verify: { id, key in await pairing.verify(id: id, key: key) },
+          onArrival: { [weak self] presence in Task { @MainActor in self?.arrived(presence) } },
+          onGone: { [weak self] presence in Task { @MainActor in self?.departed(presence) } })
+        listener.start()
+        rendezvous = listener
+      } catch {
+        NSLog("Mirri paired-tablet discovery is unavailable")
+      }
+    }
+  }
+  private func arrived(_ presence: RendezvousPresence) {
+    let previous = presences.updateValue(presence, forKey: presence.tablet.id)
+    previous?.close()
+    publishDevices()
+    startAutomatically(with: presence)
+  }
+  /// Start by itself only when someone opened the tablet app or a session
+  /// broke; never straight after an explicit Disconnect, and not in a loop.
+  private func startAutomatically(with presence: RendezvousPresence) {
+    publishDevices()
+    automaticStarts.removeAll { $0.timeIntervalSinceNow < -60 }
+    guard presence.isAlive, presence.reason != .idle, settings.autoConnect,
+      automaticStarts.count < 3,
+      selection.isEditable, pendingStart == nil, let address = presence.localAddress,
+      let device = selection.devices.first(where: { self.presence(for: $0) === presence })
+    else { return }
+    selection.select(device)
+    selection.availableAddresses(LocalIPv4Address.available())
+    selection.select(address)
+    automaticStarts.append(Date())
+    connect(rtc: !ProcessInfo.processInfo.arguments.contains("--tcp-video"))
+  }
+  private func departed(_ presence: RendezvousPresence) {
+    if presences[presence.tablet.id] === presence { presences[presence.tablet.id] = nil }
+    publishDevices()
   }
   private func reconnect() {
     Task { await coordinator.reconnect() }
@@ -143,7 +222,10 @@ import UniformTypeIdentifiers
       do {
         let route: any HostConnectionRoute
         try target.address.validateCurrent()
-        if rtc {
+        if let presence = presence(for: target.device) {
+          route = try await devices.pairedRoute(
+            presence: presence, address: target.address, rtc: rtc)
+        } else if rtc {
           route = try await devices.rtcRoute(on: target.device, address: target.address)
         } else {
           route = try await devices.networkRoute(on: target.device, address: target.address)
@@ -255,12 +337,13 @@ extension AppDelegate {
       "addresses": selection.addresses.map { ["interface": $0.interface, "address": $0.address] },
       "selectedAddress": selection.selectedAddress?.address ?? NSNull(),
       "logFolder": SessionLogger.logFolder.path,
+      "waitingPaired": presences.values.map(\.tablet.label).sorted(),
       "settings": [
         "codec": preferences.codec.rawValue, "size": preferences.logicalSize.rawValue,
         "zoom": preferences.zoom.rawValue, "pencil": preferences.auxiliaryAction.rawValue,
         "avcBitrate": preferences.avcBitrate / 1_000_000,
         "hevcBitrate": preferences.hevcBitrate / 1_000_000, "grace": preferences.graceSeconds,
-        "adaptiveBitrate": preferences.adaptiveBitrate,
+        "adaptiveBitrate": preferences.adaptiveBitrate, "autoConnect": settings.autoConnect,
       ],
     ]
   }
@@ -288,6 +371,12 @@ extension AppDelegate {
     } else if selection.selectedAddress == nil, selection.addresses.count == 1 {
       selection.select(selection.addresses[0])
     }
+    // A paired tablet already reached the host on one address; use that one.
+    if wanted == nil, let device = selection.selectedDevice,
+      let reached = presence(for: device)?.localAddress
+    {
+      selection.select(reached)
+    }
     return selection.selectedAddress == nil
       ? (selection.readinessHelp ?? "Choose a Mac address with --address") : nil
   }
@@ -310,6 +399,10 @@ extension AppDelegate {
         return "Unknown pencil action"
       }
       settings.auxiliaryAction = action
+    }
+    if let value = request["autoConnect"] {
+      guard let automatic = value as? Bool else { return "autoConnect must be true or false" }
+      settings.autoConnect = automatic
     }
     if let value = request["adaptiveBitrate"] {
       guard let adaptive = value as? Bool else { return "adaptiveBitrate must be true or false" }
@@ -381,6 +474,13 @@ extension AppDelegate {
         return failure(issue)
       }
       return reply(status())
+    case "paired":
+      return reply(["ok": true, "paired": await pairing.paired().map(\.label)])
+    case "unpair":
+      guard selection.isEditable else { return failure("Mirri is busy; disconnect first") }
+      do { try await pairing.removeAll() } catch { return failure("Could not clear pairings") }
+      for presence in Array(presences.values) { presence.close() }
+      return reply(["ok": true, "paired": [String]()])
     case "quit":
       // Not from a main-queue job: the terminate-later run loop could not then
       // drain the main queue to run the session stop it waits for.

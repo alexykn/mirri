@@ -20,10 +20,17 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import dev.mirri.client.input.TouchInterpreter
+import dev.mirri.client.pairing.PairingRevoked
+import dev.mirri.client.pairing.PairingStore
+import dev.mirri.client.pairing.RendezvousClient
+import dev.mirri.client.pairing.RendezvousWire
 import dev.mirri.client.session.ClientLaunchBoundary
 import dev.mirri.client.session.ClientSessionState
 import dev.mirri.client.session.NetworkMedia
 import dev.mirri.client.session.SessionController
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import org.webrtc.SurfaceViewRenderer
 
@@ -32,6 +39,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var controller: SessionController
     private lateinit var input: TouchInterpreter
     private lateinit var status: TextView
+    private lateinit var pairingStore: PairingStore
+
+    /** Why this tablet is waiting for its paired host, or null while a launch owns the activity. */
+    private val waitReason = MutableStateFlow<Int?>(null)
+    private var sessionSeen = false
 
     @Suppress("CyclomaticComplexMethod")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,11 +69,29 @@ class MainActivity : ComponentActivity() {
                     status.text = getString(R.string.session_status, snapshot.state, snapshot.note)
                     status.visibility =
                         if (snapshot.state == ClientSessionState.STREAMING) View.GONE else View.VISIBLE
+                    // A finished session hands the tablet back to its paired host:
+                    // a failure asks to resume, a host Stop only waits.
+                    when (snapshot.state) {
+                        ClientSessionState.FAILED -> if (sessionSeen) waitReason.value = RendezvousWire.REASON_RECOVERING
+                        ClientSessionState.IDLE -> if (sessionSeen) waitReason.value = RendezvousWire.REASON_IDLE
+                        else -> {
+                            sessionSeen = true
+                            waitReason.value = null
+                        }
+                    }
                 }
             }
         }
         input = TouchInterpreter(controller::onInput)
         val launch = ClientLaunchBoundary.decode(intent)
+        pairingStore = PairingStore(this)
+        ClientLaunchBoundary.pairing(intent)?.let(pairingStore::save)
+        controller.pairedHost = pairingStore.load() != null
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                waitReason.filterNotNull().collectLatest { reason -> waitForHost(reason) }
+            }
+        }
         val surface =
             object : SurfaceView(this) {
                 private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
@@ -198,12 +228,40 @@ class MainActivity : ComponentActivity() {
             }
         setContentView(view)
         if (launch == null) {
-            Log.w("MirriLifecycle", "launch rejected (invalid extras)")
+            Log.i("MirriLifecycle", "no host launch; waiting for a paired host")
             status.setText(R.string.launch_from_host)
+            waitReason.value = RendezvousWire.REASON_OPENED
         } else {
             Log.i("MirriLifecycle", "launch accepted surfacePending=true")
             controller.start(launch)
         }
+    }
+
+    /** Hold the authenticated rendezvous open until the host starts a session, then run it like a cable launch. */
+    private suspend fun waitForHost(reason: Int) {
+        if (pairingStore.load() == null) {
+            status.setText(R.string.launch_from_host)
+            status.visibility = View.VISIBLE
+            return
+        }
+        status.setText(R.string.waiting_for_paired_host)
+        status.visibility = View.VISIBLE
+        try {
+            val launch = RendezvousClient(this, pairingStore).awaitLaunch(reason)
+            Log.i("MirriLifecycle", "paired host launch; recreating owned activity")
+            waitReason.value = null
+            setIntent(launch.extras(android.content.Intent(this, MainActivity::class.java)))
+            recreate()
+        } catch (_: PairingRevoked) {
+            waitReason.value = null
+            status.setText(R.string.launch_from_host)
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Coming back to the app is a person asking for the display again.
+        if (waitReason.value == RendezvousWire.REASON_IDLE) waitReason.value = RendezvousWire.REASON_OPENED
     }
 
     override fun onNewIntent(intent: android.content.Intent) {

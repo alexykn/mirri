@@ -51,6 +51,11 @@ import MirriHostCore
     }
     set { store.set(min(80_000_000, max(25_000_000, newValue)), forKey: "hevcBitrate") }
   }
+  /// Start streaming when a paired tablet's app is opened on the same network.
+  var autoConnect: Bool {
+    get { store.object(forKey: "autoConnect") as? Bool ?? true }
+    set { store.set(newValue, forKey: "autoConnect") }
+  }
   var adaptiveBitrate: Bool {
     get { store.object(forKey: "adaptiveBitrate") as? Bool ?? true }
     set { store.set(newValue, forKey: "adaptiveBitrate") }

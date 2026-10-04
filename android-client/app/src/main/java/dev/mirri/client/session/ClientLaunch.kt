@@ -1,6 +1,8 @@
 package dev.mirri.client.session
 
 import android.content.Intent
+import dev.mirri.client.pairing.Hex
+import dev.mirri.client.pairing.Pairing
 import dev.mirri.client.transport.ByteConnector
 import dev.mirri.client.transport.PinnedTlsConnector
 
@@ -24,6 +26,15 @@ class ClientLaunch(
 
 object ClientLaunchBoundary {
     private val tokenPattern = Regex("[0-9a-f]{64}")
+
+    /** Pairing facts ride only on an otherwise valid network launch; all three or none. */
+    fun pairing(intent: Intent): Pairing? {
+        val launch = decode(intent) ?: return null
+        val id = intent.getStringExtra("mirri_pair_id")?.let(Hex::decode)?.takeIf { it.size == 16 } ?: return null
+        val key = intent.getStringExtra("mirri_pair_key")?.let(Hex::decode)?.takeIf { it.size == 32 } ?: return null
+        val pin = intent.getStringExtra("mirri_pair_pin")?.let(Hex::decode)?.takeIf { it.size == 32 } ?: return null
+        return Pairing(id, key, pin, launch.endpoint.host)
+    }
 
     fun decode(intent: Intent): ClientLaunch? =
         validated(

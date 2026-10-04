@@ -28,6 +28,7 @@
 		46C2D151D6CA0AC1669F963E /* USBDeviceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E746037D453B67119949E070 /* USBDeviceService.swift */; };
 		507D14D9396FB495BA1D2EF0 /* HostSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 305AC4E89EF2305E3AE4189B /* HostSettings.swift */; };
 		57A559F1C58D85FDFB43841F /* MirriHostCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */; };
+		58A88686EA623AB7B3040904 /* PairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 884C369217D5EFE50621EC3C /* PairingTests.swift */; };
 		5E606B27895ADC11C61CCCDA /* Crypto in Frameworks */ = {isa = PBXBuildFile; productRef = 9647E4783954ECC8EC3EF939 /* Crypto */; };
 		604D9CAF7B368028CDE6CF89 /* RtcIceLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCAF610D36B4D4EFD1B4DE8C /* RtcIceLedger.swift */; };
 		632349E7E64356F791202909 /* VideoEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E8ACB066CCF4D7A0E4E5488 /* VideoEncoder.swift */; };
@@ -46,6 +47,7 @@
 		98172ECE357375960EC085ED /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 46194C39CDF6009492A4F60B /* LiveKitWebRTC */; };
 		99698F81F1DE22BD41471CDB /* MirriVideoSink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E3C333B169206CEA1B523C3 /* MirriVideoSink.swift */; };
 		9989E5604F0BF4956CDF4032 /* Wire.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF05CB253AA710C5E2252AA8 /* Wire.swift */; };
+		9B4BCACAAFEF6452285623AE /* Rendezvous.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35D9D9349A433221719B7903 /* Rendezvous.swift */; };
 		9E6830EE6EA5BE5C4AEE4B05 /* VirtualDisplayController.m in Sources */ = {isa = PBXBuildFile; fileRef = BB4F8CC3234AECEB3296F00B /* VirtualDisplayController.m */; };
 		A490338D443C2426CA88E4EB /* CapturePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8C0FA2738ABBFB96C5CA242 /* CapturePipeline.swift */; };
 		A9A24E7254C9F20A19A0BA05 /* StatusMenuController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA615D89D047A32CF31FD64A /* StatusMenuController.swift */; };
@@ -53,6 +55,7 @@
 		B7FA6CA9E2FF297BA50688DF /* MirriHostCore.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C0C39458D857E7F8D598F9F2 /* X509 in Frameworks */ = {isa = PBXBuildFile; productRef = E50FE55951EC221C5D05E44A /* X509 */; };
 		C21E67024920AD0FB716C282 /* MirriHostCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */; };
+		C3B20DF9A7A9506D8611E706 /* Pairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F7F2DA70FC23FCD7C9F9FE2 /* Pairing.swift */; };
 		C8E6E6A1A8F9199F7B572439 /* VirtualDisplayController.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = F65DF3C2CFD1DA3A78B4D130 /* VirtualDisplayController.h */; };
 		CACD224F5949CB4D4A74246E /* LatencyTraceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B458A9FF29991C7B87AB67D9 /* LatencyTraceTests.swift */; };
 		CF230428D102AC1F53A38441 /* ByteTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9679DA41638D8919213B25D /* ByteTransport.swift */; };
@@ -143,9 +146,11 @@
 		29D62F2DFF19F53D2EFC3B55 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		2DB68F3A39A76AD500FD27EB /* ConnectionSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionSelection.swift; sourceTree = "<group>"; };
 		305AC4E89EF2305E3AE4189B /* HostSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSettings.swift; sourceTree = "<group>"; };
+		35D9D9349A433221719B7903 /* Rendezvous.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Rendezvous.swift; sourceTree = "<group>"; };
 		39E157F6424EA58533D321BC /* module.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = module.modulemap; sourceTree = "<group>"; };
 		3B962B725E0D76FA11CC7564 /* ControlServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlServer.swift; sourceTree = "<group>"; };
 		3E3C333B169206CEA1B523C3 /* MirriVideoSink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirriVideoSink.swift; sourceTree = "<group>"; };
+		3F7F2DA70FC23FCD7C9F9FE2 /* Pairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pairing.swift; sourceTree = "<group>"; };
 		496773F688E3BDCCF86EEF2A /* ADBClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ADBClient.swift; sourceTree = "<group>"; };
 		5CC2822FD4FEE7EBFD0D06A9 /* MirriConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirriConnection.swift; sourceTree = "<group>"; };
 		5E8ACB066CCF4D7A0E4E5488 /* VideoEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoEncoder.swift; sourceTree = "<group>"; };
@@ -157,6 +162,8 @@
 		7CB0B038D27F46F89C643CCC /* HostObservability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostObservability.swift; sourceTree = "<group>"; };
 		83F15521F33637E5E4AB7DB5 /* ConnectionPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionPanel.swift; sourceTree = "<group>"; };
 		84009A7B016920E9C5CA0158 /* WireFramer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireFramer.swift; sourceTree = "<group>"; };
+		884C369217D5EFE50621EC3C /* PairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTests.swift; sourceTree = "<group>"; };
+		8B2F02286C075E487CFC6C23 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		8B82628CF79F8E2FA8793896 /* RtcContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RtcContractTests.swift; sourceTree = "<group>"; };
 		8BB9482D1C84C5A022EB35FC /* MirriHostCore.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = MirriHostCore.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		98F3A8469F39E9B0DA6D4764 /* LoopbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackTests.swift; sourceTree = "<group>"; };
@@ -254,6 +261,7 @@
 				496773F688E3BDCCF86EEF2A /* ADBClient.swift */,
 				DC65B34F5EAC8556E1779852 /* NetworkConnectionRoute.swift */,
 				23BC31749480CD98B0873BFA /* NetworkIdentity.swift */,
+				3F7F2DA70FC23FCD7C9F9FE2 /* Pairing.swift */,
 				E746037D453B67119949E070 /* USBDeviceService.swift */,
 			);
 			path = Device;
@@ -276,6 +284,7 @@
 				B458A9FF29991C7B87AB67D9 /* LatencyTraceTests.swift */,
 				98F3A8469F39E9B0DA6D4764 /* LoopbackTests.swift */,
 				12F641742BE63E2B8FC7DE15 /* NetworkBootstrapTests.swift */,
+				884C369217D5EFE50621EC3C /* PairingTests.swift */,
 			);
 			path = SessionTests;
 			sourceTree = "<group>";
@@ -386,6 +395,7 @@
 			children = (
 				E9679DA41638D8919213B25D /* ByteTransport.swift */,
 				ABE5CB33B1DE92902BBEF4E7 /* ConnectionRoute.swift */,
+				35D9D9349A433221719B7903 /* Rendezvous.swift */,
 			);
 			path = Transport;
 			sourceTree = "<group>";
@@ -397,6 +407,7 @@
 				83F15521F33637E5E4AB7DB5 /* ConnectionPanel.swift */,
 				3B962B725E0D76FA11CC7564 /* ControlServer.swift */,
 				305AC4E89EF2305E3AE4189B /* HostSettings.swift */,
+				8B2F02286C075E487CFC6C23 /* Info.plist */,
 				9F7C7B0FBED272C8232917B0 /* main.swift */,
 				13AE55467BA9AED12E857403 /* PermissionsController.swift */,
 				AA615D89D047A32CF31FD64A /* StatusMenuController.swift */,
@@ -539,6 +550,7 @@
 				CACD224F5949CB4D4A74246E /* LatencyTraceTests.swift in Sources */,
 				63E69C6D8C1257A8876676FC /* LoopbackTests.swift in Sources */,
 				3C16A15D4CE1C47EA49B2D6E /* NetworkBootstrapTests.swift in Sources */,
+				58A88686EA623AB7B3040904 /* PairingTests.swift in Sources */,
 				37CC36FAB12D32464E1056A7 /* RtcContractTests.swift in Sources */,
 				2AE5F16C673ABE40C17A94AC /* WireTests.swift in Sources */,
 			);
@@ -585,6 +597,8 @@
 				6486ED4088D407D57239D8A7 /* NetworkBootstrap.swift in Sources */,
 				F634026EFDBCAB9F13F33288 /* NetworkConnectionRoute.swift in Sources */,
 				FABE66D10C368E337E2BA810 /* NetworkIdentity.swift in Sources */,
+				C3B20DF9A7A9506D8611E706 /* Pairing.swift in Sources */,
+				9B4BCACAAFEF6452285623AE /* Rendezvous.swift in Sources */,
 				F126611261E228972F0BB7B5 /* RtcHardwareEncoder.swift in Sources */,
 				604D9CAF7B368028CDE6CF89 /* RtcIceLedger.swift in Sources */,
 				290210F741A3F7BC8A7ACD75 /* RtcPeer.swift in Sources */,
@@ -791,8 +805,9 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Mirri connects to the selected tablet over the explicitly chosen local IPv4 address in Network (USB setup) mode.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Mirri connects to the selected tablet over the explicitly chosen local IPv4 address to stream and to find paired tablets.";
 				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Mirri displays this Mac's extended desktop on your tablet.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -894,8 +909,9 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Mirri connects to the selected tablet over the explicitly chosen local IPv4 address in Network (USB setup) mode.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Mirri connects to the selected tablet over the explicitly chosen local IPv4 address to stream and to find paired tablets.";
 				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "Mirri displays this Mac's extended desktop on your tablet.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
