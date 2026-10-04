@@ -61,7 +61,7 @@ bitstreams or real device data.
 
 The complete design, module ownership, protocol, state machines, execution
 flow, error handling, verification strategy and delivery milestones are in
-[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
+[`IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md).
 
 ## First-release target
 
