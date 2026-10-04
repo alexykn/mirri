@@ -362,8 +362,14 @@ extension AppDelegate {
   private func status() -> [String: Any] {
     let snapshot = selection.snapshot
     let preferences = settings.preferences()
+    // The address is settled automatically at connect time, so not having
+    // picked one is not something to ask for.
+    let ready = selection.isEditable && selection.selectedDevice != nil
+      && !selection.addresses.isEmpty && selection.notice == nil
+      && snapshot.state == .idle
+    let headline = ready ? "Ready to connect" : selection.headline
     return [
-      "ok": true, "headline": selection.headline, "state": snapshot.state.rawValue,
+      "ok": true, "headline": headline, "state": snapshot.state.rawValue,
       "message": snapshot.message, "starting": selection.isStarting,
       "busy": !selection.isEditable, "notice": selection.notice?.message ?? NSNull(),
       "device": snapshot.device, "virtualMode": snapshot.virtualMode,
